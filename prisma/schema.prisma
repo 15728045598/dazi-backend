@@ -1,0 +1,1077 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== 枚举类型 ====================
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  BANNED
+  DELETED
+}
+
+enum UserRole {
+  USER
+  LEADER
+  ADMIN
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum Experience {
+  LESS_THAN_1_YEAR
+  ONE_TO_3_YEARS
+  THREE_TO_5_YEARS
+  MORE_THAN_5_YEARS
+}
+
+enum LeaderLevel {
+  JUNIOR
+  MIDDLE
+  SENIOR
+}
+
+enum LeaderStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+enum ActivityCategory {
+  HIKING
+  MOUNTAIN
+  CYCLING
+  CAMPING
+  WATER
+  CITY
+  OTHER
+}
+
+enum Difficulty {
+  BEGINNER
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum ActivityStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+  PUBLISHED
+  FULL
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  VERIFIED
+  COMPLETED
+  CANCELLED
+  REFUNDING
+  REFUNDED
+}
+
+enum PointsType {
+  SIGN_IN
+  STEPS
+  INVITE
+  TRAVEL
+  REVIEW
+  LEADING
+  HELP
+  CHARITY
+  DEDUCTION
+  EXCHANGE
+  GIFT
+  EXPIRED
+}
+
+enum CouponType {
+  CASH
+  FULL_REDUCTION
+  DISCOUNT
+  NEW_USER
+}
+
+enum CouponStatus {
+  ACTIVE
+  PAUSED
+  EXPIRED
+  DEPLETED
+}
+
+enum ContentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  DELETED
+}
+
+enum WishType {
+  PLACE
+  ACTIVITY
+  SKILL
+  FRIEND
+  CUSTOM
+}
+
+enum ExpectTime {
+  ANYTIME
+  THIS_WEEK
+  THIS_MONTH
+  CUSTOM
+}
+
+enum ExpectPeople {
+  ANY
+  SMALL
+  MEDIUM
+  LARGE
+}
+
+enum WishStatus {
+  COLLECTING
+  FULL
+  CONVERTED
+  EXPIRED
+  CLOSED
+}
+
+enum HelpStatus {
+  ACTIVE
+  RESPONDED
+  COMPLETED
+  CLOSED
+  DISPUTED
+}
+
+enum ProjectStatus {
+  ACTIVE
+  COMPLETED
+  SUSPENDED
+}
+
+enum MessageType {
+  SYSTEM
+  ACTIVITY
+  ORDER
+  POINTS
+  INVITE
+  COMMUNITY
+  CHARITY
+}
+
+enum WithdrawalStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ==================== 用户相关 ====================
+
+model User {
+  id              String    @id @default(uuid())
+  openid          String    @unique
+  unionid         String?   @unique
+  phone           String?   @unique
+  nickname        String?
+  avatar          String?
+  status          UserStatus @default(ACTIVE)
+  role            UserRole   @default(USER)
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  lastLoginAt     DateTime?
+  
+  // 统计
+  activityCount   Int       @default(0)
+  points          Int       @default(0)
+  
+  // 关联
+  profile         UserProfile?
+  interests       UserInterest[]
+  addresses       UserAddress[]
+  leader          Leader?
+  orders          Order[]
+  pointsAccount   PointsAccount?
+  travels         Travel[]
+  wishes          Wish[]
+  helps           Help[]
+  messages        Message[]
+  
+  // 钱包相关
+  wallet          Wallet?
+  walletTransactions WalletTransaction[]
+  
+  // 步数统计
+  dailySteps      UserDailySteps[]
+  
+  // 邀请相关
+  inviteRelationsAsInviter   InviteRelation[]  @relation("InviterRelations")
+  inviteRelationsAsInvitee    InviteRelation[]  @relation("InviteeRelations")
+  inviteRewardsAsInviter      InviteReward[]    @relation("InviterRewards")
+  
+  @@index([openid])
+  @@index([phone])
+  @@index([status])
+}
+
+model UserProfile {
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  realName        String?
+  idCard          String?
+  gender          Gender?
+  birthday        DateTime?
+  city            String?
+  bio             String?   @db.Text
+  experience      Experience?
+  
+  phoneVisible    Boolean   @default(false)
+  activityVisible Boolean   @default(true)
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model UserInterest {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  interest    String
+  createdAt   DateTime  @default(now())
+  
+  @@unique([userId, interest])
+}
+
+model UserAddress {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  name        String
+  phone       String
+  province    String
+  city        String
+  district    String
+  detail      String
+  isDefault   Boolean   @default(false)
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  @@index([userId])
+}
+
+// ==================== 领队相关 ====================
+
+model Leader {
+  id              String      @id @default(uuid())
+  userId          String      @unique
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  level           LeaderLevel @default(JUNIOR)
+  status          LeaderStatus @default(PENDING)
+  
+  activityCount   Int         @default(0)
+  totalParticipants Int       @default(0)
+  rating          Float       @default(5.0)
+  ratingCount     Int         @default(0)
+  points          Int         @default(0)
+  
+  specialties     Json     @default("[]")
+  
+  verifiedAt      DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  
+  activities      Activity[]
+  reviews         LeaderReview[]
+  
+  @@index([level])
+  @@index([status])
+}
+
+model LeaderApplication {
+  id              String    @id @default(uuid())
+  userId          String
+  
+  realName        String
+  idCard          String
+  bio             String    @db.Text
+  experience      Experience
+  specialties     Json     @default("[]")
+  certificates    Json     @default("[]")
+  experienceDesc  String    @db.Text
+  emergencyContact String
+  emergencyPhone  String
+  
+  status          String    @default("PENDING")
+  rejectReason    String?
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@index([userId])
+  @@index([status])
+}
+
+model LeaderReview {
+  id          String    @id @default(uuid())
+  leaderId    String
+  leader      Leader    @relation(fields: [leaderId], references: [id], onDelete: Cascade)
+  userId      String
+  
+  rating      Int
+  content     String?   @db.Text
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([leaderId])
+}
+
+// ==================== 活动相关 ====================
+
+model Activity {
+  id              String          @id @default(uuid())
+  
+  title           String
+  summary         String?         @db.Text // 活动简介，显示在列表页
+  description     String          @db.Text
+  coverImage      String
+  
+  category        ActivityCategory
+  difficulty      Difficulty
+  
+  startTime       DateTime
+  endTime         DateTime
+  registerDeadline DateTime
+  
+  location        String
+  locationLat     Float?
+  locationLng     Float?
+  meetingPoint    String?
+  meetingLat      Float?
+  meetingLng      Float?
+  
+  price           Decimal         @db.Decimal(10, 2)
+  earlyBirdPrice  Decimal?        @db.Decimal(10, 2)
+  earlyBirdEndTime DateTime?
+  originalPrice   Decimal?        @db.Decimal(10, 2)
+  costBreakdown   Json?
+  costIncludes    String?         @db.Text // 费用包含
+  costExcludes    String?         @db.Text // 费用不含
+  
+  tags              Json?            @default("[]")
+  locationPoi       Json?
+  descriptionImages Json?           @default("[]")
+  
+  // 参与要求、退款政策、免责声明
+  requirements    String?         @db.Text // 参与要求
+  refundPolicy    String?         @db.Text // 退款政策
+  disclaimer      String?         @db.Text // 免责声明
+  
+  minParticipants Int             @default(2)
+  maxParticipants Int             @default(30)
+  currentCount    Int             @default(0)
+  
+  leaderId        String
+  leader          Leader          @relation(fields: [leaderId], references: [id])
+  
+  status          ActivityStatus  @default(DRAFT)
+  
+  charityAmount   Decimal         @default(1.00) @db.Decimal(10, 2)
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  images          ActivityImage[]
+  schedules       ActivitySchedule[]
+  activityRequirements    ActivityRequirement[]
+  orders          Order[]
+  travels         Travel[]
+  
+  @@index([category])
+  @@index([status])
+  @@index([startTime])
+  @@index([leaderId])
+}
+
+model ActivityImage {
+  id          String    @id @default(uuid())
+  activityId  String
+  activity    Activity  @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  url         String
+  sort        Int       @default(0)
+  createdAt   DateTime  @default(now())
+  
+  @@index([activityId])
+}
+
+model ActivitySchedule {
+  id          String    @id @default(uuid())
+  activityId  String
+  activity    Activity  @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  
+  day         Int       // 第几天
+  time        String    // 时间点
+  title       String
+  description String?   @db.Text
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([activityId])
+}
+
+model ActivityRequirement {
+  id          String    @id @default(uuid())
+  activityId  String
+  activity    Activity  @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  
+  type        String    // equipment | notice | safety
+  content     String
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([activityId])
+}
+
+// ==================== 订单相关 ====================
+
+model Order {
+  id              String      @id @default(uuid())
+  orderNo         String      @unique
+  
+  userId          String
+  user            User        @relation(fields: [userId], references: [id])
+  activityId      String
+  activity        Activity    @relation(fields: [activityId], references: [id])
+  
+  quantity        Int         @default(1)
+  
+  originalAmount  Decimal     @db.Decimal(10, 2)
+  couponDiscount  Decimal     @default(0) @db.Decimal(10, 2)
+  pointsDiscount  Decimal     @default(0) @db.Decimal(10, 2)
+  pointsUsed      Int         @default(0)
+  charityAmount   Decimal     @default(0) @db.Decimal(10, 2)
+  finalAmount     Decimal     @db.Decimal(10, 2)
+  
+  status          OrderStatus @default(PENDING)
+  
+  paidAt          DateTime?
+  verifiedAt      DateTime?
+  completedAt     DateTime?
+  cancelledAt     DateTime?
+  
+  refundAmount    Decimal?    @db.Decimal(10, 2)
+  refundReason    String?
+  
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  
+  participants    OrderParticipant[]
+  payments        Payment[]
+  refunds         Refund[]
+  verification    Verification?
+  
+  @@index([userId])
+  @@index([activityId])
+  @@index([status])
+  @@index([orderNo])
+  @@index([createdAt])
+}
+
+model OrderParticipant {
+  id          String    @id @default(uuid())
+  orderId     String
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  name        String
+  phone       String
+  idCard      String?
+  emergencyContact String?
+  emergencyPhone   String?
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([orderId])
+}
+
+model Payment {
+  id          String    @id @default(uuid())
+  orderId     String
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  paymentNo   String    @unique
+  amount      Decimal   @db.Decimal(10, 2)
+  channel     String    // WECHAT_PAY
+  status      String    // SUCCESS | FAILED
+  paidAt      DateTime?
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([orderId])
+}
+
+model Refund {
+  id          String    @id @default(uuid())
+  orderId     String
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  refundNo    String    @unique
+  amount      Decimal   @db.Decimal(10, 2)
+  reason      String?
+  status      String    // PENDING | SUCCESS | FAILED
+  refundedAt  DateTime?
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([orderId])
+}
+
+model Verification {
+  id          String    @id @default(uuid())
+  orderId     String    @unique
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  code        String    // 核销码
+  verifiedBy  String?   // 核销人
+  verifiedAt  DateTime?
+  
+  createdAt   DateTime  @default(now())
+}
+
+// ==================== 积分相关 ====================
+
+model PointsAccount {
+  id          String    @id @default(uuid())
+  userId      String    @unique
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  balance     Int       @default(0)
+  totalEarned Int       @default(0)
+  totalUsed   Int       @default(0)
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  transactions PointsTransaction[]
+}
+
+model PointsTransaction {
+  id          String    @id @default(uuid())
+  
+  accountId   String
+  account     PointsAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  userId      String
+  
+  type        PointsType
+  amount      Int
+  balance     Int
+  
+  sourceId    String?
+  sourceType  String?
+  
+  title       String
+  description String?
+  
+  expiredAt   DateTime?
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([accountId])
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ==================== 优惠券相关 ====================
+
+model Coupon {
+  id              String      @id @default(uuid())
+  
+  name            String
+  description     String?
+  
+  type            CouponType
+  value           Decimal     @db.Decimal(10, 2)
+  minAmount       Decimal?    @db.Decimal(10, 2)
+  maxDiscount     Decimal?    @db.Decimal(10, 2)
+  
+  validDays       Int
+  startTime       DateTime?
+  endTime         DateTime?
+  
+  totalCount      Int?
+  issuedCount     Int         @default(0)
+  userLimit       Int         @default(1)
+  
+  applicableCategories Json @default("[]")
+  
+  status          CouponStatus @default(ACTIVE)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  
+  userCoupons     UserCoupon[]
+}
+
+model UserCoupon {
+  id          String    @id @default(uuid())
+  
+  userId      String
+  couponId    String
+  coupon      Coupon    @relation(fields: [couponId], references: [id])
+  
+  status      String    @default("UNUSED") // UNUSED | USED | EXPIRED
+  usedAt      DateTime?
+  orderId     String?
+  
+  startTime   DateTime
+  endTime     DateTime
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([userId])
+  @@index([couponId])
+  @@index([status])
+}
+
+// ==================== 邀请相关 ====================
+
+model InviteRelation {
+  id              String    @id @default(uuid())
+  
+  inviterId       String
+  inviter         User      @relation("InviterRelations", fields: [inviterId], references: [id], onDelete: Cascade)
+  inviteeId       String    @unique
+  invitee         User      @relation("InviteeRelations", fields: [inviteeId], references: [id], onDelete: Cascade)
+  
+  inviteCode      String
+  
+  registeredAt    DateTime  @default(now())
+  
+  @@index([inviterId])
+  @@index([inviteeId])
+}
+
+model InviteReward {
+  id              String    @id @default(uuid())
+  
+  inviterId       String
+  inviter         User      @relation("InviterRewards", fields: [inviterId], references: [id], onDelete: Cascade)
+  inviteeId       String
+  
+  type            String    // REGISTER | ACTIVITY | MILESTONE
+  amount          Decimal   @db.Decimal(10, 2)
+  currency        String    @default("CNY") // CNY | POINTS
+  
+  status          String    @default("PENDING") // PENDING | PAID
+  paidAt          DateTime?
+  
+  createdAt       DateTime  @default(now())
+  
+  @@index([inviterId])
+  @@index([status])
+}
+
+model Withdrawal {
+  id              String          @id @default(uuid())
+  userId          String
+  
+  amount          Decimal         @db.Decimal(10, 2)
+  status          WithdrawalStatus @default(PENDING)
+  
+  channel         String          // WECHAT
+  channelAccount  String          // 微信号
+  
+  processedAt     DateTime?
+  failedReason    String?
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  @@index([userId])
+  @@index([status])
+}
+
+// ==================== 游记相关 ====================
+
+model Travel {
+  id          String    @id @default(uuid())
+  
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  
+  activityId  String?
+  activity    Activity? @relation(fields: [activityId], references: [id])
+  
+  title       String
+  content     String    @db.Text
+  coverImage  String?
+  
+  viewCount   Int       @default(0)
+  likeCount   Int       @default(0)
+  commentCount Int      @default(0)
+  
+  status      ContentStatus @default(PENDING)
+  
+  pointsAwarded Int     @default(0)
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  images      TravelImage[]
+  comments    TravelComment[]
+  likes       TravelLike[]
+  
+  @@index([userId])
+  @@index([activityId])
+  @@index([status])
+}
+
+model TravelImage {
+  id          String    @id @default(uuid())
+  travelId    String
+  travel      Travel    @relation(fields: [travelId], references: [id], onDelete: Cascade)
+  url         String
+  sort        Int       @default(0)
+  createdAt   DateTime  @default(now())
+  
+  @@index([travelId])
+}
+
+model TravelComment {
+  id          String    @id @default(uuid())
+  travelId    String
+  travel      Travel    @relation(fields: [travelId], references: [id], onDelete: Cascade)
+  userId      String
+  
+  content     String    @db.Text
+  parentId    String?
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([travelId])
+  @@index([userId])
+}
+
+model TravelLike {
+  id          String    @id @default(uuid())
+  travelId    String
+  travel      Travel    @relation(fields: [travelId], references: [id], onDelete: Cascade)
+  userId      String
+  
+  createdAt   DateTime  @default(now())
+  
+  @@unique([travelId, userId])
+}
+
+// ==================== 心愿相关 ====================
+
+model Wish {
+  id              String    @id @default(uuid())
+  
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  
+  type            WishType
+  title           String
+  description     String    @db.Text
+  images          Json     @default("[]")
+  
+  expectTime      ExpectTime
+  expectPeople    ExpectPeople
+  
+  tags            Json     @default("[]")
+  
+  supportCount    Int       @default(0)
+  
+  status          WishStatus @default(COLLECTING)
+  
+  convertedActivityId String?
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  supports        WishSupport[]
+  
+  @@index([userId])
+  @@index([status])
+}
+
+model WishSupport {
+  id          String    @id @default(uuid())
+  wishId      String
+  wish        Wish      @relation(fields: [wishId], references: [id], onDelete: Cascade)
+  userId      String
+  
+  createdAt   DateTime  @default(now())
+  
+  @@unique([wishId, userId])
+  @@index([wishId])
+}
+
+// ==================== 互助相关 ====================
+
+model Help {
+  id              String    @id @default(uuid())
+  
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  
+  type            String    // CARPOOL | BORROW | SKILL | INFO | PARTNER | OTHER
+  title           String
+  description     String    @db.Text
+  images          Json     @default("[]")
+  
+  urgency         String    // URGENT | THIS_WEEK | THIS_MONTH | ANY
+  location        String?
+  locationLat     Float?
+  locationLng     Float?
+  
+  rewardPoints    Int       @default(0)
+  
+  status          HelpStatus @default(ACTIVE)
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  responses       HelpResponse[]
+  
+  @@index([userId])
+  @@index([status])
+}
+
+model HelpResponse {
+  id          String    @id @default(uuid())
+  helpId      String
+  help        Help      @relation(fields: [helpId], references: [id], onDelete: Cascade)
+  userId      String
+  
+  message     String    @db.Text
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([helpId])
+  @@index([userId])
+}
+
+// ==================== 公益相关 ====================
+
+model CharityProject {
+  id              String      @id @default(uuid())
+  
+  name            String
+  description     String      @db.Text
+  coverImage      String?
+  
+  targetAmount    Decimal     @db.Decimal(10, 2)
+  raisedAmount    Decimal     @default(0) @db.Decimal(10, 2)
+  
+  status          ProjectStatus @default(ACTIVE)
+  
+  startTime       DateTime
+  endTime         DateTime?
+  
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  
+  donations       CharityDonation[]
+  expenses        CharityExpense[]
+  
+  @@index([status])
+}
+
+model CharityDonation {
+  id          String    @id @default(uuid())
+  
+  projectId   String
+  project     CharityProject @relation(fields: [projectId], references: [id])
+  userId      String?
+  
+  amount      Decimal   @db.Decimal(10, 2)
+  type        String    @default("AUTO") // AUTO | VOLUNTARY
+  
+  orderId     String?
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([projectId])
+  @@index([userId])
+}
+
+model CharityExpense {
+  id          String    @id @default(uuid())
+  
+  projectId   String
+  project     CharityProject @relation(fields: [projectId], references: [id])
+  
+  amount      Decimal   @db.Decimal(10, 2)
+  purpose     String
+  beneficiary String
+  proofImages Json @default("[]")
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([projectId])
+}
+
+model CharityApplication {
+  id          String    @id @default(uuid())
+  
+  userId      String
+  
+  type        String    // MUTUAL_AID | EMERGENCY
+  description String    @db.Text
+  proofImages Json     @default("[]")
+  amount      Decimal   @db.Decimal(10, 2)
+  bankAccount String
+  
+  status      String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  @@index([userId])
+  @@index([status])
+}
+
+// ==================== 消息相关 ====================
+
+model Message {
+  id          String    @id @default(uuid())
+  
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type        MessageType
+  title       String
+  content     String    @db.Text
+  
+  sourceId    String?
+  sourceType  String?
+  
+  isRead      Boolean   @default(false)
+  readAt      DateTime?
+  
+  pushed      Boolean   @default(false)
+  pushedAt    DateTime?
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([userId])
+  @@index([type])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+model Banner {
+  id          String    @id @default(uuid())
+  
+  title       String
+  image       String
+  link        String?   // 跳转链接
+  linkType    String?   // ACTIVITY | URL | PAGE
+  
+  position    String    @default("HOME") // HOME | DISCOVER
+  sort        Int       @default(0)
+  
+  startTime   DateTime?
+  endTime     DateTime?
+  
+  status      String    @default("ACTIVE")
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  @@index([position])
+  @@index([status])
+}
+
+// ==================== 钱包相关 ====================
+
+model Wallet {
+  id          String    @id @default(uuid())
+  
+  userId      String    @unique
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  balance     Decimal   @db.Decimal(10, 2) @default(0)
+  totalRecharge Decimal @db.Decimal(10, 2) @default(0)
+  totalSpend   Decimal  @db.Decimal(10, 2) @default(0)
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  transactions WalletTransaction[]
+  
+  @@index([userId])
+}
+
+model WalletTransaction {
+  id          String    @id @default(uuid())
+  
+  walletId    String
+  wallet      Wallet    @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type        String    // RECHARGE | SPEND | REFUND | ACTIVITY_PAY | CHARITY_DONATE | INVITE_REWARD | OTHER
+  amount      Decimal   @db.Decimal(10, 2)
+  balance     Decimal   @db.Decimal(10, 2)  // 交易后余额
+  
+  description String?
+  orderId     String?   // 关联订单
+  relatedId   String?   // 关联ID（如活动ID、捐赠ID等）
+  
+  status      String    @default("SUCCESS") // PENDING | SUCCESS | FAILED
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([walletId])
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ==================== 步数统计 ====================
+
+model UserDailySteps {
+  id          String    @id @default(uuid())
+  
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  date        String    // YYYY-MM-DD 格式
+  steps       Int       @default(0)
+  earnedPoints Int      @default(0)  // 今日已兑换的积分
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  @@unique([userId, date])
+  @@index([userId])
+  @@index([date])
+}

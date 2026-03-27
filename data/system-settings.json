@@ -1,0 +1,33 @@
+{
+  "general": {
+    "appName": "搭子小程序",
+    "contactPhone": "",
+    "contactEmail": "",
+    "enableRegister": true,
+    "enableLeaderApply": true,
+    "logo": ""
+  },
+  "points": {
+    "signInBase": 5,
+    "signInMax": 20,
+    "stepsRate": 1000,
+    "stepsMax": 200,
+    "inviteReward": 50,
+    "deductionRate": 6,
+    "deductionMin": 50
+  },
+  "wechat": {
+    "appid": "",
+    "secret": "",
+    "mchid": "",
+    "apiKey": "",
+    "notifyUrl": "",
+    "templateIdOrder": "",
+    "templateIdActivity": ""
+  },
+  "about": {
+    "version": "v1.0.0",
+    "changelog": ""
+  },
+  "updatedAt": "2026-03-26T05:57:32.708Z"
+}
