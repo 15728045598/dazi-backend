@@ -3,6 +3,11 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Public } from '../../common/decorators/public.decorator';
 import { AuthService } from './auth.service';
 
+interface AuthUser {
+  userId: string;
+  type: string;
+}
+
 @ApiTags('auth')
 @Controller({ path: 'auth', version: '1' })
 export class AuthController {
@@ -36,5 +41,14 @@ export class AuthController {
   @Post('wechat-phone')
   wechatPhoneLogin(@Body() body: { code: string; encryptedData?: string; iv?: string }) {
     return this.auth.wechatPhoneLogin(body.code, body.encryptedData, body.iv);
+  }
+
+  @ApiBearerAuth()
+  @Post('bind-phone')
+  bindPhone(
+    @Req() req: { user: AuthUser },
+    @Body() body: { code: string },
+  ) {
+    return this.auth.bindPhone(req.user.userId, body.code);
   }
 }

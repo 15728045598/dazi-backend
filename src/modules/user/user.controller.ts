@@ -19,7 +19,7 @@ export class UserController {
   @Patch('me')
   updateMe(
     @Req() req: { user: { userId: string; type: string } },
-    @Body() body: { nickname?: string; city?: string; bio?: string },
+    @Body() body: { nickname?: string; avatar?: string; city?: string; bio?: string; gender?: string },
   ) {
     if (req.user.type === 'admin') {
       return { ok: true };

@@ -31,6 +31,7 @@ import { HealthModule } from './modules/health/health.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { BannerModule } from './modules/banner/banner.module';
 import { SearchModule } from './modules/search/search.module';
+import { PartnerModule } from './modules/partner/partner.module';
 
 @Module({
   imports: [
@@ -89,6 +90,7 @@ import { SearchModule } from './modules/search/search.module';
     MessageModule,
     UploadModule,
     SearchModule,
+    PartnerModule,
   ],
 })
 export class AppModule {}

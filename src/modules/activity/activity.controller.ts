@@ -25,6 +25,13 @@ export class ActivityController {
     });
   }
 
+  // 注意：:id/participants 必须在 :id 之前，否则会被 :id 匹配
+  @Public()
+  @Get(':id/participants')
+  getParticipants(@Param('id') id: string) {
+    return this.activities.getParticipants(id);
+  }
+
   @Public()
   @Get(':id')
   getOne(@Param('id') id: string) {

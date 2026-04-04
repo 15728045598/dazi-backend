@@ -20,7 +20,7 @@ export class InviteService {
       take: 20,
     });
     // 获取被邀请人信息
-    const inviteeIds = rewards.map(r => r.inviteeId);
+    const inviteeIds = rewards.map(r => r.inviteeId).filter((id): id is string => !!id);
     const invitees = await this.prisma.user.findMany({
       where: { id: { in: inviteeIds } },
       select: { id: true, nickname: true, avatar: true },
@@ -32,7 +32,7 @@ export class InviteService {
       rewards: rewards.map((r) => ({
         ...r,
         amount: toNum(r.amount),
-        invitee: inviteeMap.get(r.inviteeId) || null,
+        invitee: r.inviteeId ? inviteeMap.get(r.inviteeId) || null : null,
       })),
     };
   }
@@ -47,7 +47,7 @@ export class InviteService {
       return { ok: false, reason: '不能邀请自己' };
     }
     const exists = await this.prisma.inviteRelation.findUnique({
-      where: { inviteeId: inviteeUserId },
+      where: { inviterId_inviteeId: { inviterId: inviter.id, inviteeId: inviteeUserId } },
     });
     if (exists) {
       return { ok: false, reason: '已绑定邀请人' };
@@ -69,13 +69,14 @@ export class InviteService {
   async grantInviteReward(inviterId: string, inviteeId: string, type: string, amount: number, currency = 'CNY') {
     const reward = await this.prisma.inviteReward.create({
       data: {
+        userId: inviterId,  // rewards go to inviter
         inviterId,
         inviteeId,
         type,
         amount,
         currency,
         status: 'PAID',
-        paidAt: new Date(),
+        // paidAt removed - not in schema
       },
     });
     // 奖励进入钱包
@@ -93,7 +94,9 @@ export class InviteService {
     // 按邀请人汇总奖励
     const inviterRewards: Record<string, number> = {};
     for (const r of rewards) {
-      inviterRewards[r.inviterId] = (inviterRewards[r.inviterId] || 0) + Number(r.amount);
+      if (r.inviterId) {
+        inviterRewards[r.inviterId] = (inviterRewards[r.inviterId] || 0) + Number(r.amount);
+      }
     }
     // 获取邀请人数
     const relations = await this.prisma.inviteRelation.groupBy({

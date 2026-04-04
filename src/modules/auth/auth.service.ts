@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import axios from 'axios';
+import * as crypto from 'crypto-js';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
@@ -30,7 +32,79 @@ export class AuthService {
   }
 
   async wechatLogin(code?: string) {
-    const openid = `wx_mock_${code || 'default'}`;
+    if (!code) {
+      throw new BadRequestException('微信登录 code 不能为空');
+    }
+
+    // 打印所有配置来调试
+    console.log('[DEBUG] All config keys:', Object.keys(this.config));
+    const appid = this.config.get<string>('wechat.appid');
+    const secret = this.config.get<string>('wechat.secret');
+    const wechatConfig = this.config.get('wechat');
+
+    console.log('[WeChat Login] wechat config:', wechatConfig);
+    console.log('[WeChat Login] AppID:', appid ? `已配置: ${appid.substring(0, 5)}...` : '未配置');
+    console.log('[WeChat Login] Secret:', secret ? '已配置' : '未配置');
+
+    // 如果没有配置 AppID 和 Secret，使用模拟模式
+    if (!appid || !secret) {
+      // 模拟模式：使用 mock openid
+      console.warn('[WeChat Login] 未配置 AppID，使用模拟模式');
+      const openid = `wx_mock_${code}`;
+      return this.findOrCreateUser(openid, `wx_mock_${code}`);
+    }
+
+    console.log('[WeChat Login] 尝试调用微信 API，code:', code);
+
+    // 调用微信 code2Session API 获取 openid
+    const wechatApiUrl = `https://api.weixin.qq.com/sns/jscode2session?appid=${appid}&secret=${secret}&js_code=${code}&grant_type=authorization_code`;
+    console.log('[WeChat Login] API URL:', wechatApiUrl.replace(secret, '***'));
+
+    try {
+      const response = await axios.get<{
+        openid?: string;
+        session_key?: string;
+        errcode?: number;
+        errmsg?: string;
+      }>(wechatApiUrl);
+
+      console.log('[WeChat Login] API Response:', response.data);
+
+      if (response.data.errcode) {
+        console.error('[WeChat Login] 错误:', response.data);
+        throw new BadRequestException(`微信登录失败: ${response.data.errmsg} (errcode: ${response.data.errcode})`);
+      }
+
+      const openid = response.data.openid;
+      if (!openid) {
+        throw new BadRequestException('微信登录失败: 未获取到 openid');
+      }
+
+      return this.findOrCreateUser(openid, response.data.session_key);
+    } catch (error) {
+      // 打印完整错误对象以便调试
+      console.error('[WeChat Login] 捕获的错误:', JSON.stringify(error, null, 2));
+      
+      // 区分 axios 错误和其他错误
+      if (error.response) {
+        // WeChat API 返回了错误响应
+        console.error('[WeChat Login] API 错误响应 status:', error.response.status);
+        console.error('[WeChat Login] API 错误响应 data:', JSON.stringify(error.response.data));
+        throw new BadRequestException(`微信登录失败: ${error.response.data?.errmsg || '未知错误'} (errcode: ${error.response.data?.errcode}, status: ${error.response.status})`);
+      } else if (error.request) {
+        // 请求发出但没有收到响应 - 网络问题
+        console.error('[WeChat Login] 网络错误 - 无响应:', error.message);
+        throw new BadRequestException('微信服务器连接失败，请稍后重试');
+      } else {
+        // 请求配置错误
+        console.error('[WeChat Login] 请求配置错误:', error.message);
+        throw new BadRequestException('微信登录失败，请稍后重试');
+      }
+    }
+  }
+
+  /** 查找或创建用户（统一方法） */
+  private async findOrCreateUser(openid: string, sessionKey?: string) {
     let user = await this.prisma.user.findUnique({ where: { openid } });
     if (!user) {
       user = await this.prisma.user.create({
@@ -184,6 +258,103 @@ export class AuthService {
         points: user.points,
         phone: user.phone,
       },
+    };
+  }
+
+  /** 通过 code 获取微信手机号（新版 API） */
+  private async getPhoneNumberByCode(code: string): Promise<string> {
+    const appid = this.config.get<string>('wechat.appid');
+    const secret = this.config.get<string>('wechat.secret');
+
+    if (!appid || !secret) {
+      throw new BadRequestException('微信配置未完成');
+    }
+
+    // 调用微信手机号获取 API
+    const wechatApiUrl = `https://api.weixin.qq.com/wxa/business/getphoneNumber?access_token=`;
+
+    // 先获取 access_token
+    const tokenUrl = `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${appid}&secret=${secret}`;
+    const tokenRes = await axios.get<{
+      access_token?: string;
+      errcode?: number;
+      errmsg?: string;
+    }>(tokenUrl);
+
+    if (tokenRes.data.errcode) {
+      throw new BadRequestException(`获取 access_token 失败: ${tokenRes.data.errmsg}`);
+    }
+
+    const accessToken = tokenRes.data.access_token;
+    if (!accessToken) {
+      throw new BadRequestException('获取 access_token 失败');
+    }
+
+    // 调用获取手机号 API
+    const phoneRes = await axios.post<{
+      errcode?: number;
+      errmsg?: string;
+      phone_info?: {
+        phoneNumber: string;
+        purePhoneNumber: string;
+      };
+    }>(`https://api.weixin.qq.com/wxa/business/getphoneNumber?access_token=${accessToken}`, {
+      code,
+    });
+
+    if (phoneRes.data.errcode) {
+      throw new BadRequestException(`获取手机号失败: ${phoneRes.data.errmsg} (errcode: ${phoneRes.data.errcode})`);
+    }
+
+    if (phoneRes.data.phone_info?.phoneNumber) {
+      return phoneRes.data.phone_info.phoneNumber;
+    }
+
+    throw new BadRequestException('获取手机号失败');
+  }
+
+  /** 绑定手机号（已登录用户） */
+  async bindPhone(userId: string, code: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException('用户不存在');
+    }
+
+    if (!code) {
+      throw new BadRequestException('缺少 code');
+    }
+
+    let phoneNumber: string;
+
+    try {
+      phoneNumber = await this.getPhoneNumberByCode(code);
+    } catch (error) {
+      // 开发环境使用模拟手机号
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[BindPhone] 获取手机号失败，使用模拟手机号:', error);
+        phoneNumber = `138${Math.floor(Math.random() * 10000000).toString().padStart(7, '0')}`;
+      } else {
+        throw error;
+      }
+    }
+
+    // 检查手机号是否已被其他用户绑定
+    const existingUser = await this.prisma.user.findFirst({
+      where: { phone: phoneNumber, NOT: { id: userId } },
+    });
+
+    if (existingUser) {
+      throw new BadRequestException('该手机号已被其他账号绑定');
+    }
+
+    // 更新用户手机号
+    const updatedUser = await this.prisma.user.update({
+      where: { id: userId },
+      data: { phone: phoneNumber },
+    });
+
+    return {
+      phone: updatedUser.phone,
     };
   }
 }

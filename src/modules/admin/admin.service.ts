@@ -327,21 +327,39 @@ export class AdminService {
     const [rows, total] = await Promise.all([
       this.prisma.activity.findMany({
         where,
-        include: { leader: { include: { user: true } }, images: true },
+        include: { 
+          leader: { include: { user: true } },  // 单领队字段（兼容）
+          leaders: { include: { leader: { include: { user: true } } } },  // 多领队表
+          images: true 
+        },
         orderBy: { createdAt: 'desc' },
         skip,
         take,
       }),
       this.prisma.activity.count({ where }),
     ]);
-    const items = rows.map((a) => ({
-      ...a,
-      price: toNum(a.price),
-      originalPrice: a.originalPrice != null ? toNum(a.originalPrice) : null,
-      charityAmount: toNum(a.charityAmount),
-      leaderName: a.leader?.user?.nickname ?? '-',
-      startTime: a.startTime.toISOString().replace('T', ' ').slice(0, 16),
-    }));
+    const items = rows.map((a) => {
+      // 优先使用多领队表，否则使用单领队字段
+      let leaderName = '-';
+      if (a.leaders && a.leaders.length > 0) {
+        // 从多领队表获取领队名称
+        const leaderNames = a.leaders
+          .map(l => l.leader?.user?.nickname)
+          .filter(Boolean);
+        leaderName = leaderNames.join(', ') || '-';
+      } else if (a.leader?.user?.nickname) {
+        // 兼容单领队字段
+        leaderName = a.leader.user.nickname;
+      }
+      return {
+        ...a,
+        price: toNum(a.price),
+        originalPrice: a.originalPrice != null ? toNum(a.originalPrice) : null,
+        charityAmount: toNum(a.charityAmount),
+        leaderName,
+        startTime: a.startTime.toISOString().replace('T', ' ').slice(0, 16),
+      };
+    });
     return { items, total };
   }
 
@@ -352,7 +370,7 @@ export class AdminService {
         leader: { include: { user: true } },
         images: true,
         schedules: true,
-        activityRequirements: true,
+        activityRequirementList: true,
       },
     });
     if (!a) throw new NotFoundException();
@@ -361,7 +379,7 @@ export class AdminService {
       price: toNum(a.price),
       originalPrice: a.originalPrice != null ? toNum(a.originalPrice) : null,
       charityAmount: toNum(a.charityAmount),
-      leaderName: a.leader?.user?.nickname,
+      leaderName: a.leader?.user?.nickname ?? '-',
       earlyBirdPrice: (a as any).earlyBirdPrice,
       earlyBirdEndTime: (a as any).earlyBirdEndTime,
       tags: (a as any).tags,
@@ -574,6 +592,19 @@ export class AdminService {
     return this.prisma.activity.update({ where: { id }, data: updateData as Prisma.ActivityUpdateInput });
   }
 
+  async deleteActivity(id: string) {
+    const activity = await this.prisma.activity.findUnique({ where: { id } });
+    if (!activity) throw new NotFoundException('活动不存在');
+    
+    // 删除活动相关的所有数据
+    await this.prisma.activityImage.deleteMany({ where: { activityId: id } });
+    await this.prisma.activityLeader.deleteMany({ where: { activityId: id } });
+    await this.prisma.order.deleteMany({ where: { activityId: id } });
+    await this.prisma.activity.delete({ where: { id } });
+    
+    return { ok: true, message: '活动已删除' };
+  }
+
   async uploadActivityImage(id: string, filename: string) {
     const activity = await this.prisma.activity.findUnique({ where: { id } });
     if (!activity) throw new NotFoundException();
@@ -597,10 +628,11 @@ export class AdminService {
   async listOrders(
     skip = 0,
     take = 20,
-    opts?: { keyword?: string; status?: OrderStatus },
+    opts?: { keyword?: string; status?: OrderStatus; activityId?: string },
   ) {
     const where: Prisma.OrderWhereInput = {};
     if (opts?.status) where.status = opts.status;
+    if (opts?.activityId) where.activityId = opts.activityId;
     if (opts?.keyword?.trim()) {
       const k = opts.keyword.trim();
       where.OR = [
@@ -649,6 +681,8 @@ export class AdminService {
       pointsDiscount: toNum(o.pointsDiscount),
       charityAmount: toNum(o.charityAmount),
       finalAmount: toNum(o.finalAmount),
+      userName: o.user?.nickname ?? '-',
+      activityTitle: o.activity?.title ?? '-',
     };
   }
 
@@ -660,6 +694,20 @@ export class AdminService {
         ...(status === OrderStatus.COMPLETED ? { completedAt: new Date() } : {}),
       },
     });
+  }
+
+  async deleteOrder(id: string) {
+    const order = await this.prisma.order.findUnique({ where: { id } });
+    if (!order) throw new NotFoundException('订单不存在');
+    
+    // 删除订单相关的核销记录
+    await this.prisma.verification.deleteMany({ where: { orderId: id } });
+    // 删除报名人员信息（使用 OrderParticipant 替代 Participant 与订单的直连关系）
+    await this.prisma.orderParticipant.deleteMany({ where: { orderId: id } });
+    // 删除订单
+    await this.prisma.order.delete({ where: { id } });
+    
+    return { ok: true, message: '订单已删除' };
   }
 
   async listLeaderApplications() {
@@ -724,6 +772,20 @@ export class AdminService {
     const leader = await this.prisma.leader.findUnique({ where: { id } });
     if (!leader) throw new NotFoundException();
     return this.prisma.leader.update({ where: { id }, data: { status } });
+  }
+
+  async deleteLeader(id: string) {
+    const leader = await this.prisma.leader.findUnique({ where: { id } });
+    if (!leader) throw new NotFoundException();
+
+    // 将用户角色降级为普通用户
+    await this.prisma.user.update({
+      where: { id: leader.userId },
+      data: { role: UserRole.USER },
+    });
+
+    // 删除领队记录
+    return this.prisma.leader.delete({ where: { id } });
   }
 
   async listLeaders() {
@@ -1054,8 +1116,7 @@ export class AdminService {
       include: {
         user: true,
         activity: true,
-        images: { orderBy: { sort: 'asc' } },
-        comments: { orderBy: { createdAt: 'desc' }, take: 30 },
+        comments: true,
       },
     });
     if (!travel) throw new NotFoundException();
@@ -1063,7 +1124,7 @@ export class AdminService {
       ...travel,
       userName: travel.user?.nickname ?? '-',
       activityTitle: travel.activity?.title ?? '-',
-      images: travel.images.map((x) => x.url),
+      images: (travel.images as unknown as string[]) ?? [],
       comments: travel.comments.map((c) => ({
         id: c.id,
         userId: c.userId,
@@ -1075,6 +1136,13 @@ export class AdminService {
 
   async updateTravelStatus(id: string, status: ContentStatus) {
     return this.prisma.travel.update({ where: { id }, data: { status } });
+  }
+
+  async updateTravel(id: string, data: Record<string, unknown>) {
+    const travel = await this.prisma.travel.findUnique({ where: { id } });
+    if (!travel) throw new NotFoundException('游记不存在');
+    delete data.id;
+    return this.prisma.travel.update({ where: { id }, data: data as any });
   }
 
   async updateTravelActivity(id: string, activityId: string | null) {
@@ -1104,6 +1172,25 @@ export class AdminService {
     return this.prisma.travel.update({
       where: { id },
       data: { status: ContentStatus.DELETED },
+    });
+  }
+
+  async createTravelFromCharity(data: { title: string; content: string; coverImage?: string; activityId?: string }) {
+    // 查找系统管理员用户作为默认作者
+    const adminUser = await this.prisma.user.findFirst({
+      where: { role: UserRole.ADMIN },
+      select: { id: true },
+    });
+    
+    return this.prisma.travel.create({
+      data: {
+        title: data.title,
+        content: data.content,
+        coverImage: data.coverImage || '',
+        userId: adminUser?.id || 'system-admin',
+        status: ContentStatus.APPROVED,
+        activityId: data.activityId || null,
+      },
     });
   }
 
@@ -1338,10 +1425,7 @@ export class AdminService {
   async listCharityProjectsAdmin() {
     const list = await this.prisma.charityProject.findMany({
       orderBy: { createdAt: 'desc' },
-      include: {
-        _count: { select: { donations: true, expenses: true } },
-      },
-    });
+    }) as any[];
     return list.map((p) => ({
       ...p,
       targetAmount: toNum(p.targetAmount),
@@ -1374,7 +1458,7 @@ export class AdminService {
 
   async listCharityDonations(skip = 0, take = 50) {
     const rows = await this.prisma.charityDonation.findMany({
-      include: { project: true },
+      include: { campaign: true },
       orderBy: { createdAt: 'desc' },
       skip,
       take,
@@ -1382,14 +1466,14 @@ export class AdminService {
     return rows.map((d) => ({
       ...d,
       amount: toNum(d.amount),
-      projectName: d.project.name,
+      projectName: (d as any).campaign?.name ?? '',
       userName: d.userId ? `用户 ${d.userId.slice(0, 8)}…` : '系统/匿名',
     }));
-  }
+   }
 
   async listCharityExpenses(skip = 0, take = 50) {
     const list = await this.prisma.charityExpense.findMany({
-      include: { project: true },
+      include: { campaign: true },
       orderBy: { createdAt: 'desc' },
       skip,
       take,
@@ -1397,26 +1481,227 @@ export class AdminService {
     return list.map((e) => ({
       ...e,
       amount: toNum(e.amount),
-      projectName: e.project.name,
+      projectName: (e as any).campaign?.name ?? '',
       proofImages: e.proofImages as unknown as string[],
     }));
   }
 
+  // Coupon management: delete and update
+  async deleteCoupon(id: string) {
+    const coupon = await this.prisma.coupon.findUnique({ where: { id } });
+    if (!coupon) throw new NotFoundException('优惠券不存在');
+    await this.prisma.userCoupon.deleteMany({ where: { couponId: id } });
+    return this.prisma.coupon.delete({ where: { id } });
+  }
+
+  async updateCoupon(id: string, data: Record<string, unknown>) {
+    const coupon = await this.prisma.coupon.findUnique({ where: { id } });
+    if (!coupon) throw new NotFoundException('优惠券不存在');
+    if (data.value !== undefined) data.value = new Prisma.Decimal(data.value as number);
+    if (data.minAmount !== undefined) data.minAmount = data.minAmount ? new Prisma.Decimal(data.minAmount as number) : null;
+    if (data.maxDiscount !== undefined) data.maxDiscount = data.maxDiscount ? new Prisma.Decimal(data.maxDiscount as number) : null;
+    return this.prisma.coupon.update({ where: { id }, data: data as Prisma.CouponUpdateInput });
+  }
+
+  // Points: get user points and search
+  async getUserPoints(userId: string) {
+    const account = await this.prisma.pointsAccount.findUnique({
+      where: { userId },
+      include: { user: { select: { id: true, nickname: true, phone: true } } },
+    });
+    if (!account) {
+      return { userId, nickname: null, phone: null, balance: 0, totalEarned: 0, totalUsed: 0 };
+    }
+    return {
+      userId: account.userId,
+      nickname: account.user?.nickname,
+      phone: account.user?.phone,
+      balance: account.balance,
+      totalEarned: account.totalEarned,
+      totalUsed: account.totalUsed,
+    };
+  }
+
+  async searchUserPoints(keyword: string) {
+    if (!keyword?.trim()) {
+      const accounts = await this.prisma.pointsAccount.findMany({
+        take: 50,
+        orderBy: { balance: 'desc' },
+        include: { user: { select: { id: true, nickname: true, phone: true } } },
+      });
+      return accounts.map(a => ({ userId: a.userId, nickname: a.user?.nickname, phone: a.user?.phone, balance: a.balance }));
+    }
+    const users = await this.prisma.user.findMany({ where: { OR: [{ nickname: { contains: keyword } }, { id: { contains: keyword } }] }, take: 20 });
+    const results: any[] = [];
+    for (const user of users) {
+      const account = await this.prisma.pointsAccount.findUnique({ where: { userId: user.id } });
+      results.push({ userId: user.id, nickname: user.nickname, phone: user.phone, balance: account?.balance ?? 0 });
+    }
+    return results;
+  }
+
+  // Charity Campaign Admin APIs
+  async listCharityCampaignsAdmin(skip = 0, take = 20, status?: string) {
+    const where: Prisma.CharityCampaignWhereInput = {};
+    if (status) where.status = status as any;
+    const [rows, total] = await Promise.all([
+      this.prisma.charityCampaign.findMany({ where, include: { _count: { select: { donations: true, expenses: true } } }, orderBy: { createdAt: 'desc' }, skip, take }),
+      this.prisma.charityCampaign.count({ where }),
+    ]);
+    return {
+      items: rows.map((c) => ({
+        ...c,
+        targetAmount: toNum(c.targetAmount),
+        raisedAmount: toNum(c.raisedAmount),
+        donationCount: (c._count as any).donations,
+        expenseCount: (c._count as any).expenses,
+      })),
+      total,
+    };
+  }
+
+  async getCharityCampaignAdmin(id: string) {
+    const campaign = await this.prisma.charityCampaign.findUnique({
+      where: { id },
+      include: {
+        donations: { take: 50, orderBy: { createdAt: 'desc' } },
+        expenses: { take: 50, orderBy: { createdAt: 'desc' } },
+      },
+    });
+    if (!campaign) throw new NotFoundException('公益活动不存在');
+    return {
+      ...campaign,
+      targetAmount: toNum(campaign.targetAmount),
+      raisedAmount: toNum(campaign.raisedAmount),
+    };
+  }
+
+  async createCharityCampaign(dto: { title: string; description: string; coverImage?: string; targetAmount: number; startDate: string; endDate?: string }) {
+    return this.prisma.charityCampaign.create({
+      data: {
+        title: dto.title,
+        description: dto.description,
+        coverImage: dto.coverImage,
+        targetAmount: dto.targetAmount,
+        startDate: new Date(dto.startDate),
+        endDate: dto.endDate ? new Date(dto.endDate) : null,
+        status: 'PLANNED',
+      },
+    });
+  }
+
+  async updateCharityCampaign(id: string, data: Record<string, unknown>) {
+    const campaign = await this.prisma.charityCampaign.findUnique({ where: { id } });
+    if (!campaign) throw new NotFoundException('公益活动不存在');
+    if (data.startDate) data.startDate = new Date(data.startDate as string);
+    if (data.endDate) data.endDate = data.endDate ? new Date(data.endDate as string) : null;
+    if (data.targetAmount) data.targetAmount = Number(data.targetAmount);
+    return this.prisma.charityCampaign.update({ where: { id }, data: data as Prisma.CharityCampaignUpdateInput });
+  }
+
+  async deleteCharityCampaign(id: string) {
+    const campaign = await this.prisma.charityCampaign.findUnique({ where: { id } });
+    if (!campaign) throw new NotFoundException('公益活动不存在');
+    await this.prisma.charityDonation.deleteMany({ where: { campaignId: id } });
+    await this.prisma.charityExpense.deleteMany({ where: { campaignId: id } });
+    await this.prisma.volunteerParticipation.deleteMany({ where: { campaignId: id } });
+    return this.prisma.charityCampaign.delete({ where: { id } });
+  }
+
+  // Price Type Methods
+  async getActivityPriceTypes(activityId: string) {
+    return this.prisma.activityPriceType.findMany({ where: { activityId }, orderBy: { sort: 'asc' } });
+  }
+
+  async createPriceType(activityId: string, dto: { name: string; price: number; description?: string; stock?: number; sort?: number }) {
+    return this.prisma.activityPriceType.create({ data: { activityId, name: dto.name, price: dto.price, description: dto.description, stock: dto.stock, sort: dto.sort ?? 0 } });
+  }
+
+  async updatePriceType(id: string, dto: { name?: string; price?: number; description?: string; stock?: number; sort?: number }) {
+    const data: Prisma.ActivityPriceTypeUpdateInput = {};
+    if (dto.name !== undefined) data.name = dto.name;
+    if (dto.price !== undefined) data.price = dto.price;
+    if (dto.description !== undefined) data.description = dto.description;
+    if (dto.stock !== undefined) data.stock = dto.stock;
+    if (dto.sort !== undefined) data.sort = dto.sort;
+    return this.prisma.activityPriceType.update({ where: { id }, data });
+  }
+
+  async deletePriceType(id: string) {
+    return this.prisma.activityPriceType.delete({ where: { id } });
+  }
+
+  async getOrderByVerificationCode(code: string) {
+    const verification = await this.prisma.verification.findFirst({ where: { code }, include: { order: { include: { user: true, activity: true, participants: true } } } });
+    if (!verification) throw new NotFoundException('核销码不存在');
+    const o = verification.order;
+    return {
+      ...o,
+      finalAmount: toNum(o.finalAmount),
+      participants: o.participants,
+      isVerified: !!verification.verifiedAt,
+    };
+  }
+
+  async verifyOrder(orderId: string, verifierId: string) {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('订单不存在');
+    if (order.status !== 'PAID') throw new BadRequestException('订单状态不正确，无法核销');
+    const verification = await this.prisma.verification.findUnique({ where: { orderId } });
+    if (verification?.verifiedAt) throw new BadRequestException('订单已核销');
+    await this.prisma.verification.update({ where: { orderId }, data: { verifiedAt: new Date(), verifiedBy: verifierId } });
+    return this.prisma.order.update({ where: { id: orderId }, data: { status: OrderStatus.VERIFIED, verifiedAt: new Date() } });
+  }
+
+  // Partner Applications
+  async listPartnerApplications(skip = 0, take = 20, opts?: { status?: string; keyword?: string }) {
+    const where: Prisma.PartnerApplicationWhereInput = {};
+    if (opts?.status) where.status = opts.status as any;
+    if (opts?.keyword?.trim()) {
+      where.OR = [
+        { name: { contains: opts.keyword } },
+        { contact: { contains: opts.keyword } },
+        { user: { nickname: { contains: opts.keyword } } },
+      ];
+    }
+    const [rows, total] = await Promise.all([
+      this.prisma.partnerApplication.findMany({ where, include: { user: { select: { id: true, nickname: true, phone: true } } }, orderBy: { createdAt: 'desc' }, skip, take }),
+      this.prisma.partnerApplication.count({ where }),
+    ]);
+    return { items: rows, total };
+  }
+
+  async getPartnerApplication(id: string) {
+    const app = await this.prisma.partnerApplication.findUnique({ where: { id }, include: { user: { select: { id: true, nickname: true, phone: true } } } });
+    if (!app) throw new NotFoundException('合作申请不存在');
+    return app;
+  }
+
+  async updatePartnerApplicationStatus(id: string, status: 'APPROVED' | 'REJECTED', adminNote?: string) {
+    return this.prisma.partnerApplication.update({ where: { id }, data: { status, adminNote } });
+  }
+
+  async deletePartnerApplication(id: string) {
+    return this.prisma.partnerApplication.delete({ where: { id } });
+  }
+
   async createCharityExpense(dto: {
-    projectId: string;
+    campaignId?: string;
+    projectId?: string;
     amount: number;
     purpose: string;
     beneficiary: string;
     proofImages?: string[];
   }) {
+    const campaignId = (dto.campaignId ?? dto.projectId) as string;
     return this.prisma.charityExpense.create({
       data: {
-        projectId: dto.projectId,
+        campaignId,
         amount: dto.amount,
         purpose: dto.purpose,
         beneficiary: dto.beneficiary,
         proofImages: (dto.proofImages ?? []) as Prisma.InputJsonValue,
-      },
+      } as any,
     });
   }
 
@@ -1517,7 +1802,7 @@ export class AdminService {
   async listInviteRewards(skip = 0, take = 50) {
     const list = await this.prisma.inviteReward.findMany({
       include: {
-        inviter: { select: { id: true, nickname: true, phone: true } },
+        user: true,
       },
       orderBy: { createdAt: 'desc' },
       skip,
@@ -1573,6 +1858,143 @@ export class AdminService {
       filename,
       size: file.size,
       mimetype: file.mimetype,
+    };
+  }
+
+  // ===== Extended Admin Helpers (added per task) =====
+  async setActivityLeaders(activityId: string, leaderIds: string[]) {
+    await this.prisma.activityLeader.deleteMany({ where: { activityId } });
+    for (const leaderId of leaderIds) {
+      await this.prisma.activityLeader.create({ data: { activityId, leaderId } });
+    }
+    return { ok: true };
+  }
+
+  async getActivityLeaders(activityId: string) {
+    const list = await this.prisma.activityLeader.findMany({
+      where: { activityId },
+      include: { leader: { include: { user: true } } },
+    });
+    return list.map((l) => {
+      const user = l.leader?.user;
+      return {
+        id: l.leader?.id,
+        userId: l.leader?.userId,
+        nickname: user?.nickname,
+        avatar: user?.avatar,
+        level: l.leader?.level,
+        status: l.leader?.status,
+      };
+    });
+  }
+
+  async getActivityParticipants(activityId: string) {
+    const orders = await this.prisma.order.findMany({
+      where: { activityId, status: { in: ['PAID', 'VERIFIED', 'COMPLETED'] } },
+      include: {
+        user: { select: { id: true, nickname: true, phone: true } },
+        participants: true,
+      },
+    });
+    const participants: any[] = [];
+    for (const order of orders) {
+      for (const p of order.participants) {
+        const { orderId: _omit, ...rest } = p as any;
+        participants.push({
+          orderId: order.id,
+          orderNo: order.orderNo,
+          userId: order.user?.id,
+          userName: order.user?.nickname,
+          userPhone: order.user?.phone,
+          ...(rest ?? {}),
+        });
+      }
+    }
+    return participants;
+  }
+
+  async exportActivityParticipants(activityId: string): Promise<string> {
+    const participants = await this.getActivityParticipants(activityId);
+    const headers = ['订单号', '用户昵称', '用户电话', '姓名', '电话', '身份证', '紧急联系人', '紧急联系电话'];
+    const rows = participants.map((p) => [
+      p.orderNo,
+      p.userName,
+      p.userPhone ?? '',
+      p.name ?? '',
+      p.phone ?? '',
+      p.idCard ?? '',
+      p.emergencyContact ?? '',
+      p.emergencyPhone ?? '',
+    ]);
+    const csv = [headers, ...rows].map((r) => r.join(',')).join('\n');
+    return csv;
+  }
+
+  async adminRefundOrder(orderId: string, reason?: string) {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('订单不存在');
+    return this.prisma.order.update({
+      where: { id: orderId },
+      data: { status: OrderStatus.REFUNDED, refundReason: reason, refundAmount: order.finalAmount },
+    });
+  }
+
+  async approveRefund(orderId: string, approvedBy: string) {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('订单不存在');
+    return this.prisma.order.update({ where: { id: orderId }, data: { status: OrderStatus.REFUNDED } });
+  }
+
+  async rejectRefund(orderId: string, reason?: string) {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('订单不存在');
+    return this.prisma.order.update({ where: { id: orderId }, data: { status: OrderStatus.PAID, refundReason: reason } });
+  }
+
+  async cancelActivityWithRefund(activityId: string, reason?: string) {
+    const activity = await this.prisma.activity.findUnique({ where: { id: activityId } });
+    if (!activity) throw new NotFoundException('活动不存在');
+    await this.prisma.activity.update({ where: { id: activityId }, data: { status: ActivityStatus.CANCELLED } });
+    const orders = await this.prisma.order.findMany({ where: { activityId, status: { in: ['PAID', 'VERIFIED'] } } });
+    for (const order of orders) {
+      await this.prisma.order.update({ where: { id: order.id }, data: { status: OrderStatus.REFUNDED, refundReason: `活动取消: ${reason || '管理员取消'}` } });
+    }
+    return { ok: true, refundedCount: orders.length };
+  }
+
+  async listVerificationRecords(skip = 0, take = 50, opts?: { activityId?: string; verified?: boolean }) {
+    const where: Prisma.VerificationWhereInput = {};
+    if (opts?.activityId) {
+      where.order = { activityId: opts.activityId };
+    }
+    if (typeof opts?.verified === 'boolean') {
+      where.verifiedAt = opts.verified ? { not: null } : null;
+    }
+    const [rows, total] = await Promise.all([
+      this.prisma.verification.findMany({
+        where,
+        include: { order: { include: { user: true, activity: true, participants: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip, take,
+      }),
+      this.prisma.verification.count({ where }),
+    ]);
+    return {
+      items: rows.map((v) => ({
+        id: v.id,
+        code: v.code,
+        verifiedAt: v.verifiedAt,
+        verifiedBy: v.verifiedBy,
+        order: {
+          id: v.order.id,
+          orderNo: v.order.orderNo,
+          userName: v.order.user?.nickname,
+          activityTitle: v.order.activity?.title,
+          finalAmount: toNum(v.order.finalAmount),
+          participants: v.order.participants.map((p) => p.name),
+        },
+      })),
+      total,
     };
   }
 }

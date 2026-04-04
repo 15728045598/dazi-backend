@@ -1,5 +1,6 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Query, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   ActivityCategory,
@@ -107,10 +108,12 @@ export class AdminController {
     @Body()
     body: {
       leaderId: string;
+      leaderIds?: string[];
       title: string;
       summary?: string; // 活动简介
       description: string;
       coverImage: string;
+      groupChatQrCode?: string; // 群聊二维码
       category: ActivityCategory;
       difficulty: Difficulty;
       startTime: string;
@@ -146,6 +149,36 @@ export class AdminController {
     return this.admin.createActivity(body);
   }
 
+  // 多领队管理：为某活动设置/更新领队集合
+  @Post('activities/:id/leaders')
+  setActivityLeaders(@Param('id') id: string, @Body() body: { leaderIds: string[] }) {
+    return this.admin.setActivityLeaders(id, body.leaderIds);
+  }
+
+  @Get('activities/:id/leaders')
+  activityLeaders(@Param('id') id: string) {
+    return this.admin.getActivityLeaders(id);
+  }
+
+  // Test endpoint to quickly verify route reachability
+  @Get('export-test/:id')
+  async exportActivityParticipantsTest(@Param('id') id: string, @Res() res: any) {
+    res.set({ 'Content-Type': 'text/plain; charset=utf-8' });
+    res.send(`OK export-test for ${id}`);
+  }
+
+  @Get('export-activity/:id')
+  async exportActivityParticipants(@Param('id') id: string) {
+    console.log('[Export] Route hit with id:', id);
+    const csv = await this.admin.exportActivityParticipants(id);
+    return csv;
+  }
+
+  @Get('activities/:id/participants')
+  activityParticipants(@Param('id') id: string) {
+    return this.admin.getActivityParticipants(id);
+  }
+
   @Get('activities/:id')
   activity(@Param('id') id: string) {
     return this.admin.getActivity(id);
@@ -161,6 +194,16 @@ export class AdminController {
     return this.admin.updateActivity(id, body);
   }
 
+  @Patch('activities/:id/group-chat-qr')
+  updateGroupChatQrCode(@Param('id') id: string, @Body() body: { groupChatQrCode: string }) {
+    return this.admin.updateActivity(id, { groupChatQrCode: body.groupChatQrCode });
+  }
+
+  @Delete('activities/:id')
+  deleteActivity(@Param('id') id: string) {
+    return this.admin.deleteActivity(id);
+  }
+
   @Post('activities/:id/images')
   uploadActivityImage(@Param('id') id: string, @Body() body: { filename: string }) {
     return this.admin.uploadActivityImage(id, body.filename);
@@ -172,10 +215,12 @@ export class AdminController {
     @Query('take') take?: string,
     @Query('keyword') keyword?: string,
     @Query('status') status?: OrderStatus,
+    @Query('activityId') activityId?: string,
   ) {
     return this.admin.listOrders(skip ? parseInt(skip, 10) : 0, take ? parseInt(take, 10) : 20, {
       keyword,
       status,
+      activityId,
     });
   }
 
@@ -185,8 +230,56 @@ export class AdminController {
   }
 
   @Patch('orders/:id/status')
-  orderStatus(@Param('id') id: string, @Body() body: { status: OrderStatus }) {
+  orderStatus(@Param('id') id: string, @Body() body: { status: OrderStatus; reason?: string }) {
     return this.admin.updateOrderStatus(id, body.status);
+  }
+
+  // 直接退款
+  @Post('orders/:id/refund')
+  adminRefundOrder(@Param('id') id: string, @Body() body: { reason?: string }) {
+    return this.admin.adminRefundOrder(id, body.reason);
+  }
+
+  // 审核通过退款
+  @Post('orders/:id/approve-refund')
+  approveRefund(@Param('id') id: string) {
+    return this.admin.approveRefund(id, 'admin');
+  }
+
+  // 拒绝退款
+  @Post('orders/:id/reject-refund')
+  rejectRefund(@Param('id') id: string, @Body() body: { reason?: string }) {
+    return this.admin.rejectRefund(id, body.reason);
+  }
+
+  // 删除订单
+  @Delete('orders/:id')
+  deleteOrder(@Param('id') id: string) {
+    return this.admin.deleteOrder(id);
+  }
+
+  // 取消活动并退款所有参与者
+  @Post('activities/:id/cancel-with-refund')
+  cancelActivityWithRefund(@Param('id') id: string, @Body() body: { reason?: string }) {
+    return this.admin.cancelActivityWithRefund(id, body.reason);
+  }
+
+  // 核销记录列表
+  @Get('verifications')
+  verificationRecords(
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+    @Query('activityId') activityId?: string,
+    @Query('verified') verified?: string,
+  ) {
+    return this.admin.listVerificationRecords(
+      skip ? parseInt(skip, 10) : 0,
+      take ? parseInt(take, 10) : 50,
+      {
+        activityId,
+        verified: verified === 'true' ? true : verified === 'false' ? false : undefined,
+      },
+    );
   }
 
   @Get('leaders')
@@ -217,6 +310,11 @@ export class AdminController {
   @Patch('leaders/:id/status')
   updateLeaderStatus(@Param('id') id: string, @Body() body: { status: LeaderStatus }) {
     return this.admin.updateLeaderStatus(id, body.status);
+  }
+
+  @Delete('leaders/:id')
+  deleteLeader(@Param('id') id: string) {
+    return this.admin.deleteLeader(id);
   }
 
   @Get('coupons')
@@ -259,6 +357,16 @@ export class AdminController {
     return this.admin.issueCouponToUsers(id, body.userIds);
   }
 
+  @Delete('coupons/:id')
+  deleteCoupon(@Param('id') id: string) {
+    return this.admin.deleteCoupon(id);
+  }
+
+  @Patch('coupons/:id')
+  updateCoupon(@Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.admin.updateCoupon(id, body);
+  }
+
   @Get('points/summary')
   pointsSummary() {
     return this.admin.pointsSummary();
@@ -290,6 +398,18 @@ export class AdminController {
     return this.admin.adjustUserPoints(body);
   }
 
+  // 获取单个用户的积分信息
+  @Get('points/user/:userId')
+  getUserPoints(@Param('userId') userId: string) {
+    return this.admin.getUserPoints(userId);
+  }
+
+  // 搜索用户积分信息
+  @Get('points/search')
+  searchUserPoints(@Query('keyword') keyword?: string) {
+    return this.admin.searchUserPoints(keyword || '');
+  }
+
   @Get('travels')
   travels(
     @Query('skip') skip?: string,
@@ -316,6 +436,11 @@ export class AdminController {
   @Patch('travels/:id/activity')
   updateTravelActivity(@Param('id') id: string, @Body() body: { activityId: string | null }) {
     return this.admin.updateTravelActivity(id, body.activityId);
+  }
+
+  @Patch('travels/:id')
+  updateTravel(@Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.admin.updateTravel(id, body);
   }
 
   @Delete('travels/:id')
@@ -401,30 +526,57 @@ export class AdminController {
     return this.admin.createMessageAdmin(body);
   }
 
+  // ===== 公益账户汇总 =====
+  
   @Get('charity/summary')
   charitySummary() {
     return this.admin.charitySummary();
   }
 
-  @Get('charity/projects')
-  charityProjects() {
-    return this.admin.listCharityProjectsAdmin();
+  // ===== 公益活动管理 =====
+  
+  @Get('charity/campaigns')
+  charityCampaigns(@Query('skip') skip?: string, @Query('take') take?: string, @Query('status') status?: string) {
+    return this.admin.listCharityCampaignsAdmin(
+      skip ? parseInt(skip, 10) : 0,
+      take ? parseInt(take, 10) : 20,
+      status,
+    );
   }
 
-  @Post('charity/projects')
-  createCharityProject(
+  @Get('charity/campaigns/:id')
+  charityCampaign(@Param('id') id: string) {
+    return this.admin.getCharityCampaignAdmin(id);
+  }
+
+  @Post('charity/campaigns')
+  createCharityCampaign(
     @Body()
     body: {
-      name: string;
+      title: string;
       description: string;
       coverImage?: string;
       targetAmount: number;
-      startTime: string;
-      endTime?: string;
-      status?: ProjectStatus;
+      startDate: string;
+      endDate?: string;
     },
   ) {
-    return this.admin.createCharityProject(body);
+    return this.admin.createCharityCampaign(body);
+  }
+
+  @Patch('charity/campaigns/:id')
+  updateCharityCampaign(@Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.admin.updateCharityCampaign(id, body);
+  }
+
+  @Patch('charity/campaigns/:id/status')
+  updateCharityCampaignStatus(@Param('id') id: string, @Body() body: { status: string }) {
+    return this.admin.updateCharityCampaign(id, { status: body.status });
+  }
+
+  @Delete('charity/campaigns/:id')
+  deleteCharityCampaign(@Param('id') id: string) {
+    return this.admin.deleteCharityCampaign(id);
   }
 
   @Get('charity/donations')
@@ -447,7 +599,7 @@ export class AdminController {
   createCharityExpense(
     @Body()
     body: {
-      projectId: string;
+      campaignId: string;
       amount: number;
       purpose: string;
       beneficiary: string;
@@ -455,6 +607,43 @@ export class AdminController {
     },
   ) {
     return this.admin.createCharityExpense(body);
+  }
+
+  // 公益活动发布事后内容（创建游记）
+  @Post('charity/create-travel')
+  createTravelFromCharity(
+    @Body()
+    body: {
+      title: string;
+      content: string;
+      coverImage?: string;
+      activityId?: string;
+    },
+  ) {
+    return this.admin.createTravelFromCharity(body);
+  }
+
+  // ===== 旧版公益项目（保留兼容）=====
+
+  @Get('charity/projects')
+  charityProjects() {
+    return this.admin.listCharityProjectsAdmin();
+  }
+
+  @Post('charity/projects')
+  createCharityProject(
+    @Body()
+    body: {
+      name: string;
+      description: string;
+      coverImage?: string;
+      targetAmount: number;
+      startTime: string;
+      endTime?: string;
+      status?: ProjectStatus;
+    },
+  ) {
+    return this.admin.createCharityProject(body);
   }
 
   // ===== 钱包管理 =====
@@ -515,5 +704,95 @@ export class AdminController {
   @UseInterceptors(FileInterceptor('file'))
   uploadImage(@UploadedFile() file: Express.Multer.File) {
     return this.admin.uploadImage(file);
+  }
+
+  // ===== 核销管理 =====
+  // 根据核销码查询订单（扫码时使用）
+  @Get('verify/code/:code')
+  getOrderByCode(@Param('code') code: string) {
+    return this.admin.getOrderByVerificationCode(code);
+  }
+
+  // 核销订单
+  @Post('verify/:orderId')
+  verifyOrder(
+    @Param('orderId') orderId: string,
+    @Body() body: { verifierId: string },
+  ) {
+    return this.admin.verifyOrder(orderId, body.verifierId);
+  }
+
+  // ===== 合作加入管理 =====
+  @Get('partners')
+  listPartners(
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+    @Query('status') status?: string,
+    @Query('keyword') keyword?: string,
+  ) {
+    return this.admin.listPartnerApplications(
+      skip ? parseInt(skip, 10) : 0,
+      take ? parseInt(take, 10) : 20,
+      { status, keyword },
+    );
+  }
+
+  @Get('partners/:id')
+  getPartner(@Param('id') id: string) {
+    return this.admin.getPartnerApplication(id);
+  }
+
+  @Patch('partners/:id/status')
+  updatePartnerStatus(
+    @Param('id') id: string,
+    @Body() body: { status: 'APPROVED' | 'REJECTED'; adminNote?: string },
+  ) {
+    return this.admin.updatePartnerApplicationStatus(id, body.status, body.adminNote);
+  }
+
+  @Delete('partners/:id')
+  deletePartner(@Param('id') id: string) {
+    return this.admin.deletePartnerApplication(id);
+  }
+
+  // ===== 价格类型管理 =====
+  @Get('activities/:activityId/price-types')
+  getActivityPriceTypes(@Param('activityId') activityId: string) {
+    return this.admin.getActivityPriceTypes(activityId);
+  }
+
+  @Post('activities/:activityId/price-types')
+  createPriceType(
+    @Param('activityId') activityId: string,
+    @Body()
+    body: {
+      name: string;
+      price: number;
+      description?: string;
+      stock?: number;
+      sort?: number;
+    },
+  ) {
+    return this.admin.createPriceType(activityId, body);
+  }
+
+  @Patch('price-types/:id')
+  updatePriceType(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      name?: string;
+      price?: number;
+      description?: string;
+      stock?: number;
+      sort?: number;
+    },
+  ) {
+    return this.admin.updatePriceType(id, body);
+  }
+
+  @Delete('price-types/:id')
+  deletePriceType(@Param('id') id: string) {
+    return this.admin.deletePriceType(id);
   }
 }

@@ -8,16 +8,21 @@ import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
+import express from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
   });
 
-  // 静态文件服务（上传的图片）
-  app.useStaticAssets(join(__dirname, '..', 'public'), {
+  // 静态文件服务
+  app.useStaticAssets(join(process.cwd(), 'public'), {
+    prefix: '/static/',
+  })
+  // 上传文件服务
+  app.useStaticAssets(join(process.cwd(), 'static', 'uploads'), {
     prefix: '/uploads/',
-  });
+  })
 
   // 使用 Pino 日志
   app.useLogger(app.get(Logger));

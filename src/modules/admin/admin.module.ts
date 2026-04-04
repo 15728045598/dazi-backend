@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { MulterModule } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { AdminController } from './admin.controller';
@@ -6,6 +7,7 @@ import { AdminService } from './admin.service';
 
 @Module({
   imports: [
+    ConfigModule,
     MulterModule.register({
       storage: memoryStorage(),
       limits: {

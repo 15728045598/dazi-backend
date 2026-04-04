@@ -5,6 +5,24 @@ generator client {
   provider = "prisma-client-js"
 }
 
+model Participant {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  phone       String
+  idCard      String?   // 身份证号
+  gender      String?   // 性别
+  birthday    DateTime? // 生日
+  emergencyContact String? // 紧急联系人
+  emergencyPhone   String? // 紧急联系人电话
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId])
+}
+
 datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
@@ -103,6 +121,7 @@ enum PointsType {
   EXCHANGE
   GIFT
   EXPIRED
+  REFUND
 }
 
 enum CouponType {
@@ -203,9 +222,16 @@ model User {
   updatedAt       DateTime  @updatedAt
   lastLoginAt     DateTime?
   
+  // 积分相关
+  points          Int       @default(0)        // 当前可用积分（余额）
+  totalPointsEarned Int     @default(0)        // 累计获得积分
+  totalPointsUsed Int      @default(0)       // 累计使用积分
+  level           Int       @default(1)       // 用户等级（200积分/级）
+  consecutiveSignInDays Int @default(0)       // 连续签到天数
+  lastSignInDate  DateTime?                    // 上次签到日期
+  
   // 统计
   activityCount   Int       @default(0)
-  points          Int       @default(0)
   
   // 关联
   profile         UserProfile?
@@ -214,9 +240,6 @@ model User {
   leader          Leader?
   orders          Order[]
   pointsAccount   PointsAccount?
-  travels         Travel[]
-  wishes          Wish[]
-  helps           Help[]
   messages        Message[]
   
   // 钱包相关
@@ -226,10 +249,29 @@ model User {
   // 步数统计
   dailySteps      UserDailySteps[]
   
+  // 报名人管理
+  participants    Participant[]
+  
+  // 领队申请
+  leaderApplications LeaderApplication[]
+
+  // 合作加入
+  partnerApplications PartnerApplication[]
+
+  // 公益相关
+  donations       CharityDonation[]
+  volunteerParticipations VolunteerParticipation[]
+  
   // 邀请相关
   inviteRelationsAsInviter   InviteRelation[]  @relation("InviterRelations")
   inviteRelationsAsInvitee    InviteRelation[]  @relation("InviteeRelations")
   inviteRewardsAsInviter      InviteReward[]    @relation("InviterRewards")
+  
+  // 游记/心愿/互助
+  travels        Travel[]
+  wishes          Wish[]
+  helps           Help[]
+  helpResponses   HelpResponse[]
   
   @@index([openid])
   @@index([phone])
@@ -287,6 +329,12 @@ model UserAddress {
 
 // ==================== 领队相关 ====================
 
+enum LeaderApplicationStatus {
+  PENDING   // 待审核
+  APPROVED  // 已通过
+  REJECTED // 已拒绝
+}
+
 model Leader {
   id              String      @id @default(uuid())
   userId          String      @unique
@@ -308,8 +356,9 @@ model Leader {
   updatedAt       DateTime    @updatedAt
   
   activities      Activity[]
+  activityLeaders ActivityLeader[]
   reviews         LeaderReview[]
-  
+
   @@index([level])
   @@index([status])
 }
@@ -317,19 +366,41 @@ model Leader {
 model LeaderApplication {
   id              String    @id @default(uuid())
   userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   
+  // 基础信息
   realName        String
-  idCard          String
-  bio             String    @db.Text
-  experience      Experience
-  specialties     Json     @default("[]")
-  certificates    Json     @default("[]")
-  experienceDesc  String    @db.Text
-  emergencyContact String
-  emergencyPhone  String
+  idCard          String?
+  gender          String?   // MALE, FEMALE, OTHER
+  age             Int?      // 年龄
+  phone           String    // 手机号
   
-  status          String    @default("PENDING")
+  // 专业资质
+  experience      Experience  // 户外经验年限
+  experienceYears String?    // 自定义年限描述
+  specialties     Json       @default("[]")  // 擅长领域（多选）
+  customSpecialties String?   // 自定义擅长领域
+  certificates    Json       @default("[]")  // 资质证书
+  
+  // 风格与偏好
+  leadershipStyle Json       @default("[]")  // 带队风格（多选）
+  customStyle     String?     // 自定义带队风格
+  availableTime   Json       @default("[]")  // 可带队时间（工作日/周末/节假日）
+  
+  // 补充说明
+  bio             String?    @db.Text
+  experienceDesc  String?    @db.Text
+  
+  // 紧急联系人
+  emergencyContact String?
+  emergencyPhone  String?
+  
+  // 状态
+  status          LeaderApplicationStatus @default(PENDING)
   rejectReason    String?
+  adminNote       String?
+  reviewedBy      String?    // 审核人
+  reviewedAt      DateTime?
   
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -349,7 +420,7 @@ model LeaderReview {
   
   createdAt   DateTime  @default(now())
   
-  @@index([leaderId])
+  
 }
 
 // ==================== 活动相关 ====================
@@ -361,6 +432,7 @@ model Activity {
   summary         String?         @db.Text // 活动简介，显示在列表页
   description     String          @db.Text
   coverImage      String
+  groupChatQrCode String?         // 群聊二维码
   
   category        ActivityCategory
   difficulty      Difficulty
@@ -397,8 +469,11 @@ model Activity {
   maxParticipants Int             @default(30)
   currentCount    Int             @default(0)
   
-  leaderId        String
-  leader          Leader          @relation(fields: [leaderId], references: [id])
+  // Multi-leader support: keep leaderId for backward compatibility (optional)
+  leaderId        String?
+  leader          Leader?        @relation(fields: [leaderId], references: [id])
+  // New multi-leader support
+  leaders         ActivityLeader[]
   
   status          ActivityStatus  @default(DRAFT)
   
@@ -409,13 +484,42 @@ model Activity {
   
   images          ActivityImage[]
   schedules       ActivitySchedule[]
-  activityRequirements    ActivityRequirement[]
+  priceTypes      ActivityPriceType[]
   orders          Order[]
+  activityRequirementList  ActivityRequirement[]
   travels         Travel[]
   
   @@index([category])
   @@index([status])
   @@index([startTime])
+  // note: leaders are now a relation via ActivityLeader join table
+}
+
+// 价格类型模型
+model ActivityPriceType {
+  id          String    @id @default(uuid())
+  activityId  String
+  activity    Activity  @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  name        String    // 票型名称，如"成人票"、"儿童票"、"早鸟票"
+  price       Decimal   @db.Decimal(10, 2) // 价格
+  description String?   @db.Text // 描述
+  stock       Int?      // 库存，为null表示不限量
+  sort        Int       @default(0) // 排序
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  @@index([activityId])
+}
+
+model ActivityLeader {
+  activityId String
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  leaderId   String
+  leader     Leader   @relation(fields: [leaderId], references: [id], onDelete: Cascade)
+  
+  @@id([activityId, leaderId])
+  @@index([activityId])
   @@index([leaderId])
 }
 
@@ -471,8 +575,13 @@ model Order {
   
   quantity        Int         @default(1)
   
+  // 价格类型
+  priceTypeId     String?     // 选中的价格类型ID
+  priceTypeName   String?     // 选中的价格类型名称
+  
   originalAmount  Decimal     @db.Decimal(10, 2)
   couponDiscount  Decimal     @default(0) @db.Decimal(10, 2)
+  couponId       String?     // 使用的优惠券ID
   pointsDiscount  Decimal     @default(0) @db.Decimal(10, 2)
   pointsUsed      Int         @default(0)
   charityAmount   Decimal     @default(0) @db.Decimal(10, 2)
@@ -642,7 +751,7 @@ model UserCoupon {
   
   userId      String
   couponId    String
-  coupon      Coupon    @relation(fields: [couponId], references: [id])
+  coupon      Coupon    @relation(fields: [couponId], references: [id], onDelete: Cascade)
   
   status      String    @default("UNUSED") // UNUSED | USED | EXPIRED
   usedAt      DateTime?
@@ -658,228 +767,137 @@ model UserCoupon {
   @@index([status])
 }
 
-// ==================== 邀请相关 ====================
-
-model InviteRelation {
-  id              String    @id @default(uuid())
-  
-  inviterId       String
-  inviter         User      @relation("InviterRelations", fields: [inviterId], references: [id], onDelete: Cascade)
-  inviteeId       String    @unique
-  invitee         User      @relation("InviteeRelations", fields: [inviteeId], references: [id], onDelete: Cascade)
-  
-  inviteCode      String
-  
-  registeredAt    DateTime  @default(now())
-  
-  @@index([inviterId])
-  @@index([inviteeId])
-}
-
-model InviteReward {
-  id              String    @id @default(uuid())
-  
-  inviterId       String
-  inviter         User      @relation("InviterRewards", fields: [inviterId], references: [id], onDelete: Cascade)
-  inviteeId       String
-  
-  type            String    // REGISTER | ACTIVITY | MILESTONE
-  amount          Decimal   @db.Decimal(10, 2)
-  currency        String    @default("CNY") // CNY | POINTS
-  
-  status          String    @default("PENDING") // PENDING | PAID
-  paidAt          DateTime?
-  
-  createdAt       DateTime  @default(now())
-  
-  @@index([inviterId])
-  @@index([status])
-}
-
-model Withdrawal {
-  id              String          @id @default(uuid())
-  userId          String
-  
-  amount          Decimal         @db.Decimal(10, 2)
-  status          WithdrawalStatus @default(PENDING)
-  
-  channel         String          // WECHAT
-  channelAccount  String          // 微信号
-  
-  processedAt     DateTime?
-  failedReason    String?
-  
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-  
-  @@index([userId])
-  @@index([status])
-}
-
-// ==================== 游记相关 ====================
-
-model Travel {
+// 公益文章
+model CharityArticle {
   id          String    @id @default(uuid())
-  
-  userId      String
-  user        User      @relation(fields: [userId], references: [id])
-  
-  activityId  String?
-  activity    Activity? @relation(fields: [activityId], references: [id])
-  
   title       String
-  content     String    @db.Text
+  summary     String?   @db.Text
   coverImage  String?
-  
-  viewCount   Int       @default(0)
-  likeCount   Int       @default(0)
-  commentCount Int      @default(0)
-  
-  status      ContentStatus @default(PENDING)
-  
-  pointsAwarded Int     @default(0)
+  content     String    @db.Text
+  views       Int       @default(0)
+  published   Boolean   @default(true)
   
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+}
+
+// 公益活动
+model CharityCampaign {
+  id            String    @id @default(uuid())
+  title         String
+  description   String    @db.Text
+  coverImage    String?
   
-  images      TravelImage[]
-  comments    TravelComment[]
-  likes       TravelLike[]
+  targetAmount  Decimal   @db.Decimal(10, 2)
+  raisedAmount  Decimal   @default(0) @db.Decimal(10, 2)
   
-  @@index([userId])
-  @@index([activityId])
+  status        String    @default("PLANNED") // PLANNED | FUNDED | IN_PROGRESS | COMPLETED | CANCELLED
+  
+  startDate     DateTime
+  endDate       DateTime?
+  
+  proofImages   Json      @default("[]")
+  expenseDesc   String?   @db.Text
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  donations     CharityDonation[]
+  expenses      CharityExpense[]
+  volunteers    VolunteerParticipation[]
+  
   @@index([status])
 }
 
-model TravelImage {
+// 捐赠记录
+model CharityDonation {
   id          String    @id @default(uuid())
-  travelId    String
-  travel      Travel    @relation(fields: [travelId], references: [id], onDelete: Cascade)
-  url         String
-  sort        Int       @default(0)
-  createdAt   DateTime  @default(now())
+  userId      String?
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   
-  @@index([travelId])
-}
-
-model TravelComment {
-  id          String    @id @default(uuid())
-  travelId    String
-  travel      Travel    @relation(fields: [travelId], references: [id], onDelete: Cascade)
-  userId      String
+  campaignId  String?
+  campaign    CharityCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   
-  content     String    @db.Text
-  parentId    String?
+  amount      Decimal   @db.Decimal(10, 2)
+  type        String    // PLATFORM_REGISTRATION | USER_DONATION | PLATFORM_DONATION
+  orderId     String?
+  note        String?
   
   createdAt   DateTime  @default(now())
-  
-  @@index([travelId])
-  @@index([userId])
-}
-
-model TravelLike {
-  id          String    @id @default(uuid())
-  travelId    String
-  travel      Travel    @relation(fields: [travelId], references: [id], onDelete: Cascade)
-  userId      String
-  
-  createdAt   DateTime  @default(now())
-  
-  @@unique([travelId, userId])
-}
-
-// ==================== 心愿相关 ====================
-
-model Wish {
-  id              String    @id @default(uuid())
-  
-  userId          String
-  user            User      @relation(fields: [userId], references: [id])
-  
-  type            WishType
-  title           String
-  description     String    @db.Text
-  images          Json     @default("[]")
-  
-  expectTime      ExpectTime
-  expectPeople    ExpectPeople
-  
-  tags            Json     @default("[]")
-  
-  supportCount    Int       @default(0)
-  
-  status          WishStatus @default(COLLECTING)
-  
-  convertedActivityId String?
-  
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  
-  supports        WishSupport[]
   
   @@index([userId])
-  @@index([status])
+  @@index([campaignId])
 }
 
-model WishSupport {
+// 公益支出
+model CharityExpense {
   id          String    @id @default(uuid())
-  wishId      String
-  wish        Wish      @relation(fields: [wishId], references: [id], onDelete: Cascade)
-  userId      String
+  campaignId  String
+  campaign    CharityCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  
+  amount      Decimal   @db.Decimal(10, 2)
+  purpose     String?   @db.Text    // 支出用途
+  beneficiary String?   @db.Text    // 受助人/对象
+  description String    @db.Text
+  proofImages Json      @default("[]")
   
   createdAt   DateTime  @default(now())
   
-  @@unique([wishId, userId])
-  @@index([wishId])
+  @@index([campaignId])
 }
 
-// ==================== 互助相关 ====================
-
-model Help {
-  id              String    @id @default(uuid())
+// 公益账户
+model PublicFund {
+  id            String    @id @default(uuid())
+  totalDonated  Decimal   @default(0) @db.Decimal(10, 2)
+  totalSpent    Decimal   @default(0) @db.Decimal(10, 2)
+  balance       Decimal   @default(0) @db.Decimal(10, 2)
   
-  userId          String
-  user            User      @relation(fields: [userId], references: [id])
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
   
-  type            String    // CARPOOL | BORROW | SKILL | INFO | PARTNER | OTHER
-  title           String
-  description     String    @db.Text
-  images          Json     @default("[]")
-  
-  urgency         String    // URGENT | THIS_WEEK | THIS_MONTH | ANY
-  location        String?
-  locationLat     Float?
-  locationLng     Float?
-  
-  rewardPoints    Int       @default(0)
-  
-  status          HelpStatus @default(ACTIVE)
-  
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  
-  responses       HelpResponse[]
-  
-  @@index([userId])
-  @@index([status])
+  transactions  PublicFundTransaction[]
 }
 
-model HelpResponse {
+// 公益资金变动记录
+model PublicFundTransaction {
+  id            String    @id @default(uuid())
+  fundId        String
+  fund          PublicFund @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  
+  type          String    // DONATION | EXPENSE | ADJUSTMENT
+  amount        Decimal   @db.Decimal(10, 2)
+  balance       Decimal   @db.Decimal(10, 2)
+  
+  description   String?
+  relatedId     String?
+  relatedType   String?
+  
+  createdAt     DateTime  @default(now())
+  
+  @@index([fundId])
+  @@index([type])
+}
+
+// 志愿者参与
+model VolunteerParticipation {
   id          String    @id @default(uuid())
-  helpId      String
-  help        Help      @relation(fields: [helpId], references: [id], onDelete: Cascade)
   userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   
-  message     String    @db.Text
+  campaignId  String
+  campaign    CharityCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  
+  hours       Int       @default(0)
+  status      String    @default("PENDING") // PENDING | CONFIRMED | COMPLETED
   
   createdAt   DateTime  @default(now())
   
-  @@index([helpId])
   @@index([userId])
+  @@index([campaignId])
 }
 
-// ==================== 公益相关 ====================
-
+// 旧版公益项目（保留兼容，不建立关联）
 model CharityProject {
   id              String      @id @default(uuid())
   
@@ -898,46 +916,10 @@ model CharityProject {
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
   
-  donations       CharityDonation[]
-  expenses        CharityExpense[]
-  
   @@index([status])
 }
 
-model CharityDonation {
-  id          String    @id @default(uuid())
-  
-  projectId   String
-  project     CharityProject @relation(fields: [projectId], references: [id])
-  userId      String?
-  
-  amount      Decimal   @db.Decimal(10, 2)
-  type        String    @default("AUTO") // AUTO | VOLUNTARY
-  
-  orderId     String?
-  
-  createdAt   DateTime  @default(now())
-  
-  @@index([projectId])
-  @@index([userId])
-}
-
-model CharityExpense {
-  id          String    @id @default(uuid())
-  
-  projectId   String
-  project     CharityProject @relation(fields: [projectId], references: [id])
-  
-  amount      Decimal   @db.Decimal(10, 2)
-  purpose     String
-  beneficiary String
-  proofImages Json @default("[]")
-  
-  createdAt   DateTime  @default(now())
-  
-  @@index([projectId])
-}
-
+// 旧版捐赠记录（兼容）
 model CharityApplication {
   id          String    @id @default(uuid())
   
@@ -1074,4 +1056,244 @@ model UserDailySteps {
   @@unique([userId, date])
   @@index([userId])
   @@index([date])
+}
+
+// ==================== 合作加入 ====================
+
+enum PartnerStatus {
+  PENDING    // 待审核
+  APPROVED   // 已通过
+  REJECTED   // 已拒绝
+}
+
+model PartnerApplication {
+  id          String        @id @default(uuid())
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // 合作类型
+  partnerType String       // RESOURCE:资源合作, CONTENT:内容合作, BUSINESS:商务合作, OTHER:其他
+  
+  // 个人/机构信息
+  name        String        // 姓名或机构名称
+  contact     String       // 联系方式（手机号）
+  email       String?       // 邮箱（可选）
+  company     String?       // 公司/组织（可选）
+  position    String?       // 职位（可选）
+  
+  // 合作内容
+  resources   String       @db.Text  // 可以带来的资源或能力介绍
+  expectCooperation String? @db.Text // 期望的合作方式
+  
+  // 状态
+  status      PartnerStatus @default(PENDING)
+  adminNote   String?       // 管理员备注
+  
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  
+  @@index([userId])
+  @@index([status])
+}
+
+// ==================== 游记相关 ====================
+
+model Travel {
+  id          String        @id @default(uuid())
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  title       String
+  content     String        @db.Text
+  coverImage  String?
+  images      Json          @default("[]")  // JSON格式图片列表
+  location    String?
+  locationLat Float?
+  locationLng Float?
+  
+  // 关联活动（可选）
+  activityId  String?
+  activity    Activity?   @relation(fields: [activityId], references: [id], onDelete: SetNull)
+  
+  status      ContentStatus @default(PENDING)
+  views       Int           @default(0)
+  viewCount   Int           @default(0)   // 浏览次数
+  likes       Int           @default(0)
+  likeCount   Int           @default(0)   // 点赞数
+  commentCount Int         @default(0)   // 评论数
+  
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  // 关联
+  comments    TravelComment[]
+  likes_      TravelLike[]
+  imageList   TravelImage[] @relation("TravelImages")  // 单独的图片表
+  
+  @@index([userId])
+  @@index([status])
+  @@index([activityId])
+}
+
+model TravelComment {
+  id          String    @id @default(uuid())
+  travelId    String
+  travel      Travel    @relation(fields: [travelId], references: [id], onDelete: Cascade)
+  userId      String
+  
+  content     String    @db.Text
+  parentId    String?   // 回复某条评论
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([travelId])
+}
+
+model TravelImage {
+  id          String    @id @default(uuid())
+  travelId    String
+  travel      Travel    @relation("TravelImages", fields: [travelId], references: [id], onDelete: Cascade)
+  url         String
+  sort        Int       @default(0)
+  
+  createdAt   DateTime  @default(now())
+}
+
+model TravelLike {
+  id          String    @id @default(uuid())
+  travelId    String
+  travel      Travel    @relation(fields: [travelId], references: [id], onDelete: Cascade)
+  userId      String
+  
+  createdAt   DateTime  @default(now())
+  
+  @@unique([travelId, userId])
+  @@index([travelId])
+}
+
+// ==================== 心愿相关 ====================
+
+model Wish {
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type        WishType
+  title       String
+  description String?     @db.Text
+  content     String      @db.Text
+  images      Json        @default("[]")
+  tags        Json        @default("[]")
+  
+  expectTime  ExpectTime
+  expectPeople ExpectPeople
+  
+  status      WishStatus  @default(COLLECTING)
+  expiresAt   DateTime?
+  supportCount Int       @default(0)  // 支持人数
+  
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  supports    WishSupport[]
+  
+  @@index([userId])
+  @@index([status])
+}
+
+model WishSupport {
+  id          String    @id @default(uuid())
+  wishId      String
+  wish        Wish      @relation(fields: [wishId], references: [id], onDelete: Cascade)
+  userId      String
+  
+  createdAt   DateTime  @default(now())
+  
+  @@unique([wishId, userId])
+  @@index([wishId])
+}
+
+// ==================== 互助相关 ====================
+
+model Help {
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  title       String
+  content     String      @db.Text
+  description String?     @db.Text  // 描述
+  images      Json        @default("[]")
+  
+  type        String?     // 互助类型
+  category    String?
+  location    String?
+  
+  status      HelpStatus  @default(ACTIVE)
+  resolvedAt  DateTime?
+  
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  responses   HelpResponse[]
+  
+  @@index([userId])
+  @@index([status])
+}
+
+model HelpResponse {
+  id          String    @id @default(uuid())
+  helpId      String
+  help        Help      @relation(fields: [helpId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  content     String    @db.Text
+  contact     String?
+  message     String?   @db.Text  // 留言内容（与content相同）
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([helpId])
+}
+
+// ==================== 邀请相关 ====================
+
+model InviteRelation {
+  id          String    @id @default(uuid())
+  inviterId   String
+  inviteeId   String
+  
+  // 兼容字段
+  inviteCode  String?   // 邀请码（兼容）
+  registeredAt DateTime @default(now())  // 注册时间
+  
+  inviter     User      @relation("InviterRelations", fields: [inviterId], references: [id], onDelete: Cascade, map: "InviteRelation_inviterId_fkey")
+  invitee     User      @relation("InviteeRelations", fields: [inviteeId], references: [id], onDelete: Cascade, map: "InviteRelation_inviteeId_fkey")
+  
+  createdAt   DateTime  @default(now())
+  
+  @@unique([inviterId, inviteeId])
+  @@index([inviterId])
+  @@index([inviteeId])
+}
+
+model InviteReward {
+  id          String    @id @default(uuid())
+  userId      String
+  inviterId   String?   // 邀请者ID
+  inviteeId   String?   // 被邀请者ID
+  status      String?   @default("PAID")  // 状态
+  currency    String?   @default("CNY")   // 货币
+  
+  user        User      @relation("InviterRewards", fields: [userId], references: [id], onDelete: Cascade, map: "InviteReward_userId_fkey")
+  
+  type        String    // INVITE_BONUS | INVITE_REWARD
+  amount      Int
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([userId])
+  @@index([inviterId])
+  @@index([inviteeId])
 }

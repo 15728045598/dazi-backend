@@ -135,24 +135,27 @@ export class SearchService {
               ],
               status: 'APPROVED',
             }
-          : { status: 'APPROVED' },
+            : { status: 'APPROVED' },
         include: {
           user: {
-            select: { nickname: true, avatar: true },
+            select: { id: true, nickname: true, avatar: true },
           },
-          images: { take: 3, orderBy: { sort: 'asc' } },
+          activity: {
+            select: { id: true, title: true },
+          },
+          imageList: { take: 3, orderBy: { sort: 'asc' } },
         },
         orderBy: { createdAt: 'desc' },
         take,
       });
-      results.travels = travels.map((t) => ({
+      results.travels = travels.map((t: any) => ({
         id: t.id,
         title: t.title,
         content: t.content,
-        coverImage: t.images[0]?.url || t.coverImage,
-        images: t.images.map((i) => i.url),
-        userNickname: t.user.nickname,
-        userAvatar: t.user.avatar,
+        coverImage: t.imageList?.[0]?.url || t.coverImage,
+        images: t.imageList?.map((i: any) => i.url) || [],
+        userNickname: t.user?.nickname,
+        userAvatar: t.user?.avatar,
         likeCount: t.likeCount,
         commentCount: t.commentCount,
         createdAt: t.createdAt,

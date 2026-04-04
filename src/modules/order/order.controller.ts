@@ -20,6 +20,12 @@ export class OrderController {
     return this.orders.getById(req.user.userId, id);
   }
 
+  @Get(':id/verification')
+  getVerification(@Req() req: { user: { userId: string; type: string } }, @Param('id') id: string) {
+    if (req.user.type === 'admin') throw new ForbiddenException();
+    return this.orders.getVerificationCode(req.user.userId, id);
+  }
+
   @Post()
   create(
     @Req() req: { user: { userId: string; type: string } },
@@ -27,8 +33,10 @@ export class OrderController {
     body: {
       activityId: string;
       quantity: number;
+      priceTypeId?: string;
       participants: { name: string; phone: string; idCard?: string }[];
       usePoints?: boolean;
+      couponId?: string;
     },
   ) {
     if (req.user.type === 'admin') throw new ForbiddenException();
@@ -39,5 +47,11 @@ export class OrderController {
   mockPay(@Req() req: { user: { userId: string; type: string } }, @Param('id') id: string) {
     if (req.user.type === 'admin') throw new ForbiddenException();
     return this.orders.mockPay(req.user.userId, id);
+  }
+
+  @Post(':id/refund')
+  refund(@Req() req: { user: { userId: string; type: string } }, @Param('id') id: string, @Body() body: { reason?: string; refundAmount?: number }) {
+    if (req.user.type === 'admin') throw new ForbiddenException();
+    return this.orders.refund(req.user.userId, id, body.reason, body.refundAmount);
   }
 }
