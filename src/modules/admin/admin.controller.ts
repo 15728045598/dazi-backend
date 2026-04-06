@@ -9,6 +9,8 @@ import {
   CouponStatus,
   CouponType,
   Difficulty,
+  FeedbackStatus,
+  FeedbackType,
   HelpStatus,
   LeaderStatus,
   MessageType,
@@ -492,6 +494,42 @@ export class AdminController {
   @Get('helps/:id')
   help(@Param('id') id: string) {
     return this.admin.getHelpAdmin(id);
+  }
+
+  // ===== 反馈管理 =====
+  @Get('feedbacks')
+  feedbacks(
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+    @Query('keyword') keyword?: string,
+    @Query('status') status?: FeedbackStatus,
+    @Query('type') type?: FeedbackType,
+  ) {
+    return this.admin.listFeedbacks(
+      skip ? parseInt(skip, 10) : 0,
+      take ? parseInt(take, 10) : 20,
+      { keyword, status, type },
+    );
+  }
+
+  @Get('feedbacks/:id')
+  feedback(@Param('id') id: string) {
+    return this.admin.getFeedback(id);
+  }
+
+  @Post('feedbacks/:id/reply')
+  feedbackReply(@Param('id') id: string, @Body() body: { reply: string; repliedBy: string }) {
+    return this.admin.replyFeedback(id, body);
+  }
+
+  @Patch('feedbacks/:id/status')
+  feedbackStatus(@Param('id') id: string, @Body() body: { status: FeedbackStatus }) {
+    return this.admin.updateFeedbackStatus(id, body.status);
+  }
+
+  @Delete('feedbacks/:id')
+  deleteFeedback(@Param('id') id: string) {
+    return this.admin.deleteFeedback(id);
   }
 
   @Get('messages')

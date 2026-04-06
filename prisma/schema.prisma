@@ -272,6 +272,7 @@ model User {
   wishes          Wish[]
   helps           Help[]
   helpResponses   HelpResponse[]
+  feedbacks      Feedback[]
   
   @@index([openid])
   @@index([phone])
@@ -1255,6 +1256,44 @@ model HelpResponse {
   createdAt   DateTime  @default(now())
   
   @@index([helpId])
+}
+
+// ==================== 反馈相关 ====================
+
+enum FeedbackStatus {
+  PENDING     // 待处理
+  PROCESSING  // 处理中
+  RESOLVED    // 已解决
+  REJECTED   // 已拒绝
+}
+
+enum FeedbackType {
+  BUG         // 功能异常
+  SUGGEST     // 建议反馈
+  COMPLAINT   // 投诉
+  OTHER       // 其他
+}
+
+model Feedback {
+  id          String        @id @default(uuid())
+  userId      String?
+  user        User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  type        FeedbackType  @default(SUGGEST)
+  content     String        @db.Text
+  contact     String?       // 联系方式
+  
+  status      FeedbackStatus @default(PENDING)
+  reply       String?       @db.Text  // 回复内容
+  repliedAt   DateTime?
+  repliedBy   String?       // 回复人
+  
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  @@index([userId])
+  @@index([status])
+  @@index([type])
 }
 
 // ==================== 邀请相关 ====================

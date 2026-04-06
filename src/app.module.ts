@@ -32,6 +32,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { BannerModule } from './modules/banner/banner.module';
 import { SearchModule } from './modules/search/search.module';
 import { PartnerModule } from './modules/partner/partner.module';
+import { FeedbackModule } from './modules/feedback/feedback.module';
 
 @Module({
   imports: [
@@ -91,6 +92,7 @@ import { PartnerModule } from './modules/partner/partner.module';
     UploadModule,
     SearchModule,
     PartnerModule,
+    FeedbackModule,
   ],
 })
 export class AppModule {}

@@ -21,35 +21,32 @@ export class LeaderController {
     return this.leader.getMyApplications(req.user.userId);
   }
 
+  @Get('participant')
+  getParticipant(@Req() req: { user: { userId: string; type: string } }) {
+    if (req.user.type === 'admin') throw new ForbiddenException();
+    return this.leader.getParticipant(req.user.userId);
+  }
+
   @Post('apply')
   apply(
     @Req() req: { user: { userId: string; type: string } },
     @Body()
     body: {
-      // 基础信息
       realName: string;
       gender?: string;
       age?: number;
       phone: string;
       idCard?: string;
-      
-      // 专业资质
       experience: Experience;
       experienceYears?: string;
       specialties: string[];
       customSpecialties?: string;
       certificates?: string[];
-      
-      // 风格与偏好
       leadershipStyle: string[];
       customStyle?: string;
       availableTime: string[];
-      
-      // 补充说明
       bio?: string;
       experienceDesc?: string;
-      
-      // 紧急联系人
       emergencyContact?: string;
       emergencyPhone?: string;
     },

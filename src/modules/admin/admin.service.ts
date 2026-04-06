@@ -8,6 +8,8 @@ import {
   CouponStatus,
   CouponType,
   Difficulty,
+  FeedbackStatus,
+  FeedbackType,
   HelpStatus,
   LeaderStatus,
   MessageType,
@@ -1050,7 +1052,7 @@ export class AdminService {
       data: {
         accountId: account.id,
         userId: userId, // 使用用户ID
-        type: isIncrease ? 'MANUAL_ADD' : 'MANUAL_DEDUCT' as any,
+        type: isIncrease ? 'GIFT' : 'DEDUCTION',
         amount,
         balance: account.balance + amount,
         title: reason.trim(),
@@ -1996,5 +1998,79 @@ export class AdminService {
       })),
       total,
     };
+  }
+
+  // ===== 反馈管理 =====
+  async listFeedbacks(
+    skip = 0,
+    take = 20,
+    opts?: { keyword?: string; status?: FeedbackStatus; type?: FeedbackType },
+  ) {
+    const where: Prisma.FeedbackWhereInput = {};
+    if (opts?.status) where.status = opts.status;
+    if (opts?.type) where.type = opts.type;
+    if (opts?.keyword?.trim()) {
+      const k = opts.keyword.trim();
+      where.OR = [
+        { content: { contains: k } },
+        { contact: { contains: k } },
+        { user: { nickname: { contains: k } } },
+      ];
+    }
+    const [rows, total] = await Promise.all([
+      this.prisma.feedback.findMany({
+        where,
+        include: { user: { select: { id: true, nickname: true, phone: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.prisma.feedback.count({ where }),
+    ]);
+    const items = rows.map((f) => ({
+      ...f,
+      userName: f.user?.nickname ?? '-',
+      userPhone: f.user?.phone ?? '-',
+    }));
+    return { items, total };
+  }
+
+  async getFeedback(id: string) {
+    const feedback = await this.prisma.feedback.findUnique({
+      where: { id },
+      include: { user: { select: { id: true, nickname: true, phone: true, avatar: true } } },
+    });
+    if (!feedback) throw new NotFoundException('反馈不存在');
+    return {
+      ...feedback,
+      userName: feedback.user?.nickname ?? '-',
+      userPhone: feedback.user?.phone ?? '-',
+    };
+  }
+
+  async replyFeedback(id: string, dto: { reply: string; repliedBy: string }) {
+    const feedback = await this.prisma.feedback.findUnique({ where: { id } });
+    if (!feedback) throw new NotFoundException('反馈不存在');
+    return this.prisma.feedback.update({
+      where: { id },
+      data: {
+        reply: dto.reply,
+        repliedBy: dto.repliedBy,
+        repliedAt: new Date(),
+        status: FeedbackStatus.RESOLVED,
+      },
+    });
+  }
+
+  async updateFeedbackStatus(id: string, status: FeedbackStatus) {
+    const feedback = await this.prisma.feedback.findUnique({ where: { id } });
+    if (!feedback) throw new NotFoundException('反馈不存在');
+    return this.prisma.feedback.update({ where: { id }, data: { status } });
+  }
+
+  async deleteFeedback(id: string) {
+    const feedback = await this.prisma.feedback.findUnique({ where: { id } });
+    if (!feedback) throw new NotFoundException('反馈不存在');
+    return this.prisma.feedback.delete({ where: { id } });
   }
 }

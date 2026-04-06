@@ -22,6 +22,23 @@ export class LeaderService {
     });
   }
 
+  async getParticipant(userId: string) {
+    const leader = await this.prisma.leader.findUnique({
+      where: { userId },
+    });
+    if (!leader) return null;
+    // 返回领队信息用于预填表单
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, nickname: true, phone: true },
+    });
+    return {
+      ...leader,
+      userNickname: user?.nickname,
+      userPhone: user?.phone,
+    };
+  }
+
   async apply(
     userId: string,
     dto: {
