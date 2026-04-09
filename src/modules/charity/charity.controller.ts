@@ -31,10 +31,43 @@ export class CharityController {
     );
   }
 
+  // 公益活动（从 Activity 表获取，isCharity=true）
   @Public()
-  @Get('campaigns/:id')
-  getCampaign(@Param('id') id: string) {
-    return this.charity.getCampaign(id);
+  @Get('activities')
+  listCharityActivities(
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+  ) {
+    return this.charity.listCharityActivities(
+      skip ? parseInt(skip, 10) : 0,
+      take ? parseInt(take, 10) : 20,
+    );
+  }
+
+  // 活动记录（Travel 表中关联了公益活动的记录）
+  @Public()
+  @Get('records')
+  listCharityRecords(
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+  ) {
+    return this.charity.listCharityRecords(
+      skip ? parseInt(skip, 10) : 0,
+      take ? parseInt(take, 10) : 20,
+    );
+  }
+
+  // 支出记录
+  @Public()
+  @Get('expenses')
+  listExpenses(
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+  ) {
+    return this.charity.listExpenses(
+      skip ? parseInt(skip, 10) : 0,
+      take ? parseInt(take, 10) : 20,
+    );
   }
 
   // 旧版公益项目接口（保留兼容）
@@ -50,8 +83,7 @@ export class CharityController {
     );
   }
 
-  // 公益文章接口（临时注释，等待数据库修复）
-  /*
+  // 公益文章接口
   @Public()
   @Get('articles')
   listArticles(
@@ -100,7 +132,6 @@ export class CharityController {
     if (req.user.type !== 'admin') throw new ForbiddenException();
     return this.charity.deleteArticle(id);
   }
-  */
 
   @Public()
   @Get('donations/public')

@@ -315,7 +315,7 @@ export class AdminService {
   async listActivities(
     skip = 0,
     take = 20,
-    opts?: { keyword?: string; category?: ActivityCategory; status?: ActivityStatus },
+    opts?: { keyword?: string; category?: ActivityCategory; status?: ActivityStatus; isCharity?: boolean },
   ) {
     const where: Prisma.ActivityWhereInput = {};
     if (opts?.keyword?.trim()) {
@@ -326,6 +326,7 @@ export class AdminService {
     }
     if (opts?.category) where.category = opts.category;
     if (opts?.status) where.status = opts.status;
+    if (opts?.isCharity !== undefined) where.isCharity = opts.isCharity;
     const [rows, total] = await Promise.all([
       this.prisma.activity.findMany({
         where,
@@ -415,6 +416,7 @@ export class AdminService {
     minParticipants?: number;
     maxParticipants?: number;
     status?: ActivityStatus;
+    isCharity?: boolean;
     // 基础字段
     summary?: string; // 活动简介
     // 价格相关
@@ -499,6 +501,7 @@ export class AdminService {
       maxParticipants: dto.maxParticipants ?? 30,
       leaderId: dto.leaderId,
       status: dto.status ?? ActivityStatus.PENDING,
+      isCharity: dto.isCharity ?? false,
       charityAmount: new Prisma.Decimal(1),
       // 新增字段
       costIncludes: dto.costIncludes || '',
@@ -1170,11 +1173,9 @@ export class AdminService {
     const travel = await this.prisma.travel.findUnique({ where: { id } });
     if (!travel) throw new NotFoundException('游记不存在');
     
-    // Soft delete: mark as DELETED status
-    return this.prisma.travel.update({
-      where: { id },
-      data: { status: ContentStatus.DELETED },
-    });
+    // Hard delete: actually delete from database
+    await this.prisma.travel.delete({ where: { id } });
+    return { id };
   }
 
   async createTravelFromCharity(data: { title: string; content: string; coverImage?: string; activityId?: string }) {
@@ -1184,12 +1185,17 @@ export class AdminService {
       select: { id: true },
     });
     
+    if (!adminUser) {
+      throw new BadRequestException('系统没有管理员用户，请先创建管理员');
+    }
+    
+    // activityId 关联到 Activity 表
     return this.prisma.travel.create({
       data: {
         title: data.title,
         content: data.content,
         coverImage: data.coverImage || '',
-        userId: adminUser?.id || 'system-admin',
+        userId: adminUser.id,
         status: ContentStatus.APPROVED,
         activityId: data.activityId || null,
       },
@@ -1409,10 +1415,11 @@ export class AdminService {
   }
 
   async charitySummary() {
-    const [donAgg, expAgg, donationCount] = await Promise.all([
+    const [donAgg, expAgg, donationCount, donorCount] = await Promise.all([
       this.prisma.charityDonation.aggregate({ _sum: { amount: true } }),
       this.prisma.charityExpense.aggregate({ _sum: { amount: true } }),
       this.prisma.charityDonation.count(),
+      this.prisma.charityDonation.groupBy({ by: ['userId'], where: { userId: { not: null } } }),
     ]);
     const totalDonation = toNum(donAgg._sum.amount ?? 0);
     const totalExpense = toNum(expAgg._sum.amount ?? 0);
@@ -1421,6 +1428,7 @@ export class AdminService {
       totalExpense,
       balance: totalDonation - totalExpense,
       donationCount,
+      donorCount: donorCount.length,
     };
   }
 
@@ -1459,33 +1467,54 @@ export class AdminService {
   }
 
   async listCharityDonations(skip = 0, take = 50) {
-    const rows = await this.prisma.charityDonation.findMany({
-      include: { campaign: true },
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take,
-    });
-    return rows.map((d) => ({
-      ...d,
-      amount: toNum(d.amount),
-      projectName: (d as any).campaign?.name ?? '',
-      userName: d.userId ? `用户 ${d.userId.slice(0, 8)}…` : '系统/匿名',
-    }));
+    const [rows, total] = await Promise.all([
+      this.prisma.charityDonation.findMany({
+        include: { campaign: true, user: true },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.prisma.charityDonation.count(),
+    ]);
+    return {
+      items: rows.map((d) => ({
+        ...d,
+        amount: toNum(d.amount),
+        campaignTitle: (d as any).campaign?.title ?? '',
+        userName: d.user?.nickname ?? '匿名',
+      })),
+      total,
+    };
    }
 
-  async listCharityExpenses(skip = 0, take = 50) {
-    const list = await this.prisma.charityExpense.findMany({
-      include: { campaign: true },
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take,
-    });
-    return list.map((e) => ({
-      ...e,
-      amount: toNum(e.amount),
-      projectName: (e as any).campaign?.name ?? '',
-      proofImages: e.proofImages as unknown as string[],
-    }));
+  async listCharityExpenses(skip = 0, take = 50, activityId?: string) {
+    const where: any = {};
+    if (activityId) {
+      where.OR = [
+        { campaignId: activityId },
+        { activityId: activityId },
+      ];
+    }
+    
+    const [list, total] = await Promise.all([
+      this.prisma.charityExpense.findMany({
+        where,
+        include: { campaign: true, activity: true },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.prisma.charityExpense.count({ where }),
+    ]);
+    return {
+      items: list.map((e) => ({
+        ...e,
+        amount: toNum(e.amount),
+        activityTitle: (e as any).campaign?.title ?? (e as any).activity?.title ?? '',
+        proofImages: e.proofImages as unknown as string[],
+      })),
+      total,
+    };
   }
 
   // Coupon management: delete and update
@@ -1690,21 +1719,50 @@ export class AdminService {
   async createCharityExpense(dto: {
     campaignId?: string;
     projectId?: string;
+    activityId?: string;
     amount: number;
     purpose: string;
-    beneficiary: string;
+    beneficiary?: string;
+    description?: string;
     proofImages?: string[];
   }) {
-    const campaignId = (dto.campaignId ?? dto.projectId) as string;
     return this.prisma.charityExpense.create({
       data: {
-        campaignId,
+        campaignId: dto.campaignId ?? dto.projectId ?? null,
+        activityId: dto.activityId ?? null,
         amount: dto.amount,
         purpose: dto.purpose,
         beneficiary: dto.beneficiary,
+        description: dto.description ?? '',
         proofImages: (dto.proofImages ?? []) as Prisma.InputJsonValue,
       } as any,
     });
+  }
+
+  async updateCharityExpense(id: string, dto: {
+    activityId?: string;
+    amount?: number;
+    purpose?: string;
+    beneficiary?: string;
+    description?: string;
+    proofImages?: string[];
+  }) {
+    const updateData: any = {};
+    if (dto.activityId !== undefined) updateData.activityId = dto.activityId;
+    if (dto.amount !== undefined) updateData.amount = dto.amount;
+    if (dto.purpose !== undefined) updateData.purpose = dto.purpose;
+    if (dto.beneficiary !== undefined) updateData.beneficiary = dto.beneficiary;
+    if (dto.description !== undefined) updateData.description = dto.description;
+    if (dto.proofImages !== undefined) updateData.proofImages = dto.proofImages as Prisma.InputJsonValue;
+    
+    return this.prisma.charityExpense.update({
+      where: { id },
+      data: updateData,
+    });
+  }
+
+  async deleteCharityExpense(id: string) {
+    return this.prisma.charityExpense.delete({ where: { id } });
   }
 
   // ===== 钱包管理 =====

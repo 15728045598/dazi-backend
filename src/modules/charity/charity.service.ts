@@ -259,29 +259,31 @@ export class CharityService {
 
   // 获取所有捐赠记录（公开账本）
   async getPublicDonations(skip = 0, take = 50) {
+    // 按用户累计捐赠金额排序
     const [items, total] = await Promise.all([
-      this.prisma.charityDonation.findMany({
-        orderBy: { createdAt: 'desc' },
+      this.prisma.charityDonation.groupBy({
+        by: ['userId'],
+        _sum: { amount: true },
+        orderBy: { _sum: { amount: 'desc' } },
         skip,
         take,
-        include: {
-          campaign: { select: { id: true, title: true } },
-        },
       }),
-      this.prisma.charityDonation.count(),
+      this.prisma.charityDonation.groupBy({
+        by: ['userId'],
+        _sum: { amount: true },
+      }),
     ]);
     
+    const totalCount = total.length;
+    
     return {
-      items: items.map(d => ({
-        id: d.id,
-        amount: this.toNum(d.amount),
-        type: d.type,
-        createdAt: d.createdAt,
-        campaignTitle: d.campaign?.title,
-        // 公开显示：匿名，仅显示金额
-        displayName: '匿名',
+      items: items.map((d, idx) => ({
+        id: d.userId || `user-${idx}`,
+        amount: this.toNum(d._sum.amount ?? 0),
+        displayName: d.userId ? `爱心用户${idx + 1}` : '匿名',
+        rank: skip + idx + 1,
       })),
-      total,
+      total: totalCount,
     };
   }
 
@@ -404,18 +406,196 @@ export class CharityService {
     };
   }
 
-  // ===== 公益文章 (临时注释，等待数据库修复) =====
-  /*
+  // ===== 公益文章 =====
   async listArticles(skip = 0, take = 10) {
-    return { items: [], total: 0 };
+    const [items, total] = await Promise.all([
+      this.prisma.charityArticle.findMany({
+        where: { published: true },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.prisma.charityArticle.count({ where: { published: true } }),
+    ]);
+    return { items, total };
   }
+
   async getArticle(id: string) {
-    throw new NotFoundException('文章功能暂不可用');
+    const article = await this.prisma.charityArticle.findUnique({ where: { id } });
+    if (!article) throw new NotFoundException('文章不存在');
+    // 增加浏览量
+    await this.prisma.charityArticle.update({
+      where: { id },
+      data: { views: article.views + 1 },
+    });
+    return { ...article, views: article.views + 1 };
   }
-  async createArticle(data: any) { return { id: '' }; }
-  async updateArticle(id: string, data: any) { return { id }; }
-  async deleteArticle(id: string) { return { id }; }
-  */
+
+  async createArticle(data: { title: string; summary?: string; coverImage?: string; content: string }) {
+    return this.prisma.charityArticle.create({
+      data: {
+        title: data.title,
+        summary: data.summary,
+        coverImage: data.coverImage,
+        content: data.content,
+        published: true,
+      },
+    });
+  }
+
+  async updateArticle(id: string, data: { title?: string; summary?: string; coverImage?: string; content?: string; published?: boolean }) {
+    const article = await this.prisma.charityArticle.findUnique({ where: { id } });
+    if (!article) throw new NotFoundException('文章不存在');
+    return this.prisma.charityArticle.update({
+      where: { id },
+      data: {
+        ...(data.title && { title: data.title }),
+        ...(data.summary !== undefined && { summary: data.summary }),
+        ...(data.coverImage !== undefined && { coverImage: data.coverImage }),
+        ...(data.content && { content: data.content }),
+        ...(data.published !== undefined && { published: data.published }),
+      },
+    });
+  }
+
+  async deleteArticle(id: string) {
+    const article = await this.prisma.charityArticle.findUnique({ where: { id } });
+    if (!article) throw new NotFoundException('文章不存在');
+    await this.prisma.charityArticle.delete({ where: { id } });
+    return { id };
+  }
+
+  // ===== 公益活动（从 Activity 表获取，isCharity=true） =====
+  async listCharityActivities(skip = 0, take = 20) {
+    const [items, total] = await Promise.all([
+      this.prisma.activity.findMany({
+        where: { isCharity: true },
+        orderBy: { startTime: 'desc' },
+        skip,
+        take,
+        select: {
+          id: true,
+          title: true,
+          coverImage: true,
+          location: true,
+          startTime: true,
+          endTime: true,
+          price: true,
+          currentCount: true,
+          maxParticipants: true,
+          status: true,
+          summary: true,
+        },
+      }),
+      this.prisma.activity.count({ where: { isCharity: true } }),
+    ]);
+
+    const baseUrl = this.getBaseUrl();
+    return {
+      items: items.map(a => ({
+        ...a,
+        price: this.toNum(a.price),
+        coverImage: a.coverImage ? this.fixImageUrl(a.coverImage, baseUrl) : null,
+      })),
+      total,
+    };
+  }
+
+  // ===== 活动记录（Travel 表中关联了公益活动的记录） =====
+  async listCharityRecords(skip = 0, take = 20) {
+    const activities = await this.prisma.activity.findMany({
+      where: { isCharity: true },
+      select: { id: true },
+    });
+    const charityActivityIds = activities.map(a => a.id);
+
+    if (charityActivityIds.length === 0) {
+      return { items: [], total: 0 };
+    }
+
+    const [items, total] = await Promise.all([
+      this.prisma.travel.findMany({
+        where: { activityId: { in: charityActivityIds } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+        include: {
+          user: { select: { id: true, nickname: true, avatar: true } },
+          activity: { select: { id: true, title: true } },
+          imageList: { orderBy: { sort: 'asc' } },
+        },
+      }),
+      this.prisma.travel.count({ where: { activityId: { in: charityActivityIds } } }),
+    ]);
+
+    const baseUrl = this.getBaseUrl();
+    return {
+      items: items.map(t => ({
+        id: t.id,
+        title: t.title,
+        content: t.content,
+        coverImage: t.coverImage ? this.fixImageUrl(t.coverImage, baseUrl) : null,
+        images: t.imageList?.map(img => ({ url: img.url ? this.fixImageUrl(img.url, baseUrl) : img.url })),
+        user: { id: t.user.id, nickname: t.user.nickname, avatar: this.fixAvatar(t.user.avatar, baseUrl) },
+        activity: t.activity ? { id: t.activity.id, title: t.activity.title } : null,
+        createdAt: t.createdAt,
+        viewCount: t.viewCount || 0,
+        likeCount: t.likeCount || 0,
+        commentCount: t.commentCount || 0,
+      })),
+      total,
+    };
+  }
+
+  // ===== 支出记录 =====
+  async listExpenses(skip = 0, take = 20) {
+    const [items, total] = await Promise.all([
+      this.prisma.charityExpense.findMany({
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+        include: {
+          campaign: { select: { id: true, title: true } },
+          activity: { select: { id: true, title: true } },
+        },
+      }),
+      this.prisma.charityExpense.count(),
+    ]);
+
+    return {
+      items: items.map(e => ({
+        id: e.id,
+        activityId: e.activityId || e.campaignId,
+        activityTitle: e.activity?.title || e.campaign?.title || '平台支出',
+        amount: this.toNum(e.amount),
+        purpose: e.purpose,
+        beneficiary: e.beneficiary,
+        description: e.description,
+        proofImages: e.proofImages || [],
+        createdAt: e.createdAt,
+      })),
+      total,
+    };
+  }
+
+  private getBaseUrl(): string {
+    return process.env.API_BASE_URL || '';
+  }
+
+  private fixImageUrl(url: string | null, baseUrl: string): string | null {
+    if (!url) return null;
+    if (url.startsWith('http')) return url;
+    if (!baseUrl) return url;
+    return baseUrl + url;
+  }
+
+  private fixAvatar(avatar: string | null, baseUrl: string): string {
+    if (!avatar) return 'https://img.yzcdn.cn/vant/logo.png';
+    if (avatar.startsWith('http')) return avatar;
+    if (!baseUrl) return avatar;
+    return baseUrl + avatar;
+  }
+
   // ===== 工具函数 =====
   
   private toNum(val: any): number {

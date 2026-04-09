@@ -55,7 +55,17 @@ export class TravelService {
       where: { id },
       include: { 
         user: { select: { id: true, nickname: true, avatar: true } },
-        activity: { select: { id: true, title: true } },
+        activity: {
+          select: { 
+            id: true, 
+            title: true, 
+            coverImage: true,
+            location: true,
+            startTime: true,
+            endTime: true,
+            price: true,
+          }
+        },
         imageList: { orderBy: { sort: 'asc' } },
         likes_: true,
       },
@@ -67,13 +77,38 @@ export class TravelService {
       where: { id },
       data: { viewCount: { increment: 1 } },
     });
-    
+
+    // 获取活动参与者
+    let participants: { user: { id: string; nickname: string | null; avatar: string | null } }[] = [];
+    let activityInfo: any = null;
     const baseUrl = this.getBaseUrl();
+    if (travel.activityId) {
+      const orders = await this.prisma.order.findMany({
+        where: { activityId: travel.activityId, status: 'PAID' },
+        include: { user: { select: { id: true, nickname: true, avatar: true } } },
+      });
+      participants = orders.map(o => ({ user: { id: o.user.id, nickname: o.user.nickname, avatar: o.user.avatar } }));
+      
+      const activity = await this.prisma.activity.findUnique({
+        where: { id: travel.activityId },
+        select: { id: true, title: true, location: true, startTime: true, endTime: true, price: true, currentCount: true, maxParticipants: true },
+      });
+      if (activity) {
+        activityInfo = { ...activity };
+      }
+    }
+    
     return {
       ...travel,
       coverImage: travel.coverImage ? fixImageUrl(travel.coverImage, baseUrl) : travel.coverImage,
       images: travel.imageList?.map(img => ({ ...img, url: img.url ? fixImageUrl(img.url, baseUrl) : img.url })),
       user: this.fixUserAvatar(travel.user),
+      activity: travel.activity ? {
+        ...travel.activity,
+        coverImage: travel.activity.coverImage ? fixImageUrl(travel.activity.coverImage, baseUrl) : travel.activity.coverImage,
+      } : null,
+      activityInfo,
+      participants,
     };
   }
 

@@ -86,11 +86,12 @@ export class ActivityService {
     return result;
   }
 
-  async list(params: { category?: ActivityCategory; status?: ActivityStatus; skip?: number; take?: number }) {
+  async list(params: { category?: ActivityCategory; status?: ActivityStatus; isCharity?: boolean; skip?: number; take?: number }) {
     const where: Prisma.ActivityWhereInput = {};
     if (params.category) where.category = params.category;
     if (params.status) where.status = params.status;
     else where.status = { in: [ActivityStatus.PUBLISHED, ActivityStatus.IN_PROGRESS] };
+    if (params.isCharity !== undefined) where.isCharity = params.isCharity;
 
     const [items, total] = await Promise.all([
       this.prisma.activity.findMany({

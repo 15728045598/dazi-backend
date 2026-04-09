@@ -97,11 +97,13 @@ export class AdminController {
     @Query('keyword') keyword?: string,
     @Query('category') category?: ActivityCategory,
     @Query('status') status?: ActivityStatus,
+    @Query('isCharity') isCharity?: string,
   ) {
     return this.admin.listActivities(skip ? parseInt(skip, 10) : 0, take ? parseInt(take, 10) : 20, {
       keyword,
       category,
       status,
+      isCharity: isCharity === 'true' ? true : isCharity === 'false' ? false : undefined,
     });
   }
 
@@ -126,6 +128,7 @@ export class AdminController {
       minParticipants?: number;
       maxParticipants?: number;
       status?: ActivityStatus;
+      isCharity?: boolean; // 是否为公益活动
       // 价格相关
       earlyBirdPrice?: number;
       earlyBirdEndTime?: string;
@@ -626,10 +629,15 @@ export class AdminController {
   }
 
   @Get('charity/expenses')
-  charityExpenses(@Query('skip') skip?: string, @Query('take') take?: string) {
+  charityExpenses(
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+    @Query('activityId') activityId?: string,
+  ) {
     return this.admin.listCharityExpenses(
       skip ? parseInt(skip, 10) : 0,
       take ? parseInt(take, 10) : 50,
+      activityId,
     );
   }
 
@@ -637,14 +645,37 @@ export class AdminController {
   createCharityExpense(
     @Body()
     body: {
-      campaignId: string;
+      campaignId?: string;
+      activityId?: string;
       amount: number;
       purpose: string;
-      beneficiary: string;
+      beneficiary?: string;
+      description?: string;
       proofImages?: string[];
     },
   ) {
     return this.admin.createCharityExpense(body);
+  }
+
+  @Patch('charity/expenses/:id')
+  updateCharityExpense(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      activityId?: string;
+      amount?: number;
+      purpose?: string;
+      beneficiary?: string;
+      description?: string;
+      proofImages?: string[];
+    },
+  ) {
+    return this.admin.updateCharityExpense(id, body);
+  }
+
+  @Delete('charity/expenses/:id')
+  deleteCharityExpense(@Param('id') id: string) {
+    return this.admin.deleteCharityExpense(id);
   }
 
   // 公益活动发布事后内容（创建游记）
@@ -656,6 +687,7 @@ export class AdminController {
       content: string;
       coverImage?: string;
       activityId?: string;
+      images?: string[];
     },
   ) {
     return this.admin.createTravelFromCharity(body);

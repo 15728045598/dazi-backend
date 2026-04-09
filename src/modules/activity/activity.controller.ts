@@ -14,12 +14,14 @@ export class ActivityController {
   list(
     @Query('category') category?: ActivityCategory,
     @Query('status') status?: ActivityStatus,
+    @Query('isCharity') isCharity?: string,
     @Query('skip') skip?: string,
     @Query('take') take?: string,
   ) {
     return this.activities.list({
       category,
       status,
+      isCharity: isCharity === 'true' ? true : isCharity === 'false' ? false : undefined,
       skip: skip ? parseInt(skip, 10) : 0,
       take: take ? parseInt(take, 10) : 20,
     });
