@@ -214,4 +214,65 @@ export class WalletService {
       };
     });
   }
+
+  // 提现申请
+  async withdraw(
+    userId: string,
+    amount: number,
+    type: 'WECHAT' | 'BANK',
+    accountInfo: { openid?: string; bankCardNo?: string; bankName?: string; realName?: string },
+  ) {
+    if (amount <= 0) {
+      throw new BadRequestException('提现金额必须大于0');
+    }
+    // 最小提现额度 1 元
+    if (amount < 1) {
+      throw new BadRequestException('提现金额不能少于1元');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      let wallet = await tx.wallet.findUnique({ where: { userId } });
+      if (!wallet) {
+        wallet = await tx.wallet.create({ data: { userId } });
+      }
+      if (wallet.balance.lessThan(amount)) {
+        throw new BadRequestException('余额不足');
+      }
+
+      const newBalance = wallet.balance.minus(amount);
+      await tx.wallet.update({
+        where: { id: wallet.id },
+        data: { balance: newBalance },
+      });
+
+      // 创建提现记录（待审核）
+      const tr = await tx.walletTransaction.create({
+        data: {
+          walletId: wallet.id,
+          userId,
+          type: 'WITHDRAW',
+          amount: -amount, // 支出为负数
+          balance: newBalance,
+          description: type === 'WECHAT' ? '微信提现' : '银行卡提现',
+          status: 'PENDING', // 待审核状态
+          relatedId: accountInfo.openid || accountInfo.bankCardNo || null,
+        },
+      });
+
+      return {
+        ...tr,
+        amount: toNum(tr.amount),
+        balance: toNum(tr.balance),
+      };
+    });
+  }
+
+  // 获取用户提现记录
+  async getWithdrawals(userId: string, take = 20) {
+    return this.prisma.walletTransaction.findMany({
+      where: { userId, type: 'WITHDRAW' },
+      orderBy: { createdAt: 'desc' },
+      take,
+    });
+  }
 }

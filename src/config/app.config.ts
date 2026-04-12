@@ -27,4 +27,13 @@ export const AppConfig = () => ({
       'image/webp',
     ],
   },
+  aliyun: {
+    oss: {
+      accessKeyId: process.env.ALIYUN_OSS_ACCESS_KEY_ID,
+      accessKeySecret: process.env.ALIYUN_OSS_ACCESS_KEY_SECRET,
+      bucket: process.env.ALIYUN_OSS_BUCKET,
+      endpoint: process.env.ALIYUN_OSS_ENDPOINT,
+      customDomain: process.env.ALIYUN_OSS_CUSTOM_DOMAIN,
+    },
+  },
 });

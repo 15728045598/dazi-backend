@@ -129,6 +129,7 @@ enum CouponType {
   FULL_REDUCTION
   DISCOUNT
   NEW_USER
+  INVITE
 }
 
 enum CouponStatus {
@@ -265,7 +266,9 @@ model User {
   // 邀请相关
   inviteRelationsAsInviter   InviteRelation[]  @relation("InviterRelations")
   inviteRelationsAsInvitee    InviteRelation[]  @relation("InviteeRelations")
-  inviteRewardsAsInviter      InviteReward[]    @relation("InviterRewards")
+  
+  // 推广大使
+  promoter      Promoter?
   
   // 游记/心愿/互助
   travels        Travel[]
@@ -1308,37 +1311,100 @@ model InviteRelation {
   id          String    @id @default(uuid())
   inviterId   String
   inviteeId   String
-  
+   
   // 兼容字段
   inviteCode  String?   // 邀请码（兼容）
   registeredAt DateTime @default(now())  // 注册时间
-  
+   
   inviter     User      @relation("InviterRelations", fields: [inviterId], references: [id], onDelete: Cascade, map: "InviteRelation_inviterId_fkey")
   invitee     User      @relation("InviteeRelations", fields: [inviteeId], references: [id], onDelete: Cascade, map: "InviteRelation_inviteeId_fkey")
-  
+   
   createdAt   DateTime  @default(now())
-  
+    
   @@unique([inviterId, inviteeId])
   @@index([inviterId])
   @@index([inviteeId])
 }
 
+// 邀请奖励记录
 model InviteReward {
   id          String    @id @default(uuid())
-  userId      String
-  inviterId   String?   // 邀请者ID
-  inviteeId   String?   // 被邀请者ID
-  status      String?   @default("PAID")  // 状态
-  currency    String?   @default("CNY")   // 货币
-  
-  user        User      @relation("InviterRewards", fields: [userId], references: [id], onDelete: Cascade, map: "InviteReward_userId_fkey")
-  
-  type        String    // INVITE_BONUS | INVITE_REWARD
-  amount      Int
+  userId      String    // 获得奖励的用户（邀请人）
+  inviterId   String?   // 邀请人ID
+  inviteeId   String?   // 被邀请人ID
+  type        String    // REGISTER:注册奖励, FIRST_ACTIVITY:首次活动奖励
+  amount      Decimal   @db.Decimal(10, 2)
+  currency    String    @default("CNY")
+  status      String    @default("PAID") // PENDING | PAID | FAILED
+  orderId     String?   // 关联订单（活动奖励时）
   
   createdAt   DateTime  @default(now())
   
   @@index([userId])
   @@index([inviterId])
   @@index([inviteeId])
+}
+
+// 推广大使状态
+enum PromoterStatus {
+  ACTIVE
+  DISABLED
+}
+
+// 奖励类型
+enum RewardType {
+  FIRST_ACTIVITY  // 首次活动奖励
+  ACTIVITY        // 活动奖励
+}
+
+// 奖励状态
+enum RewardStatus {
+  PENDING   // 待结算
+  SETTLED   // 已结算（可提现）
+  WITHDRAWN // 已提现
+}
+
+// 推广大使
+model Promoter {
+  id              String        @id @default(uuid())
+  userId          String        @unique
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  totalEarnings   Decimal       @default(0) @db.Decimal(10, 2) // 累计收益
+  pendingEarnings Decimal       @default(0) @db.Decimal(10, 2) // 待结算收益
+  withdrawnAmount Decimal       @default(0) @db.Decimal(10, 2) // 已提现收益
+  
+  status          PromoterStatus @default(ACTIVE)
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  rewards         PromoterReward[]
+  
+  @@index([status])
+}
+
+// 推广大使奖励记录
+model PromoterReward {
+  id            String        @id @default(uuid())
+  promoterId    String
+  promoter      Promoter      @relation(fields: [promoterId], references: [id], onDelete: Cascade)
+  
+  type          RewardType    // FIRST_ACTIVITY | ACTIVITY
+  amount        Decimal       @db.Decimal(10, 2)
+  status        RewardStatus  @default(PENDING)
+  
+  // 关联活动信息
+  activityId    String?
+  activityTitle String?
+  userId        String?       // 被邀请用户ID
+  
+  settledAt     DateTime?     // 结算时间
+  withdrawnAt   DateTime?     // 提现时间
+  
+  createdAt     DateTime      @default(now())
+  
+  @@index([promoterId])
+  @@index([status])
+  @@index([activityId])
 }

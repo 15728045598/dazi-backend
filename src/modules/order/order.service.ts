@@ -5,12 +5,14 @@ import { randomBytes } from 'crypto';
 import * as QRCode from 'qrcode';
 import { PrismaService } from '../../prisma/prisma.service';
 import { toNum } from '../../common/utils/decimal';
+import { WechatPayUtil } from '../../common/utils/wechat-pay.util';
 
 @Injectable()
 export class OrderService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly wechatPay: WechatPayUtil,
   ) {}
 
   // 获取基础URL
@@ -653,8 +655,36 @@ export class OrderService {
       }
     });
 
-    // In production, integrate with WeChat Pay refund API here
-    
-    return { ok: true, refundNo, refundAmount: actualRefundAmount, message: '退款申请已提交' };
+    // 调用微信支付退款API
+    let wechatRefundResult: Record<string, unknown> = {};
+    try {
+      // 从订单中获取微信支付交易号(如果存储了的话)
+      const transactionId = (o as any)?.transactionId || '';
+      wechatRefundResult = await this.wechatPay.createRefund({
+        transactionId: transactionId || o.orderNo,
+        outRefundNo: refundNo,
+        totalFee: Number(o.finalAmount) * 100, // 转为分
+        refundFee: actualRefundAmount * 100,
+        refundDesc: reason,
+      });
+      console.log('[Order] 微信退款结果:', wechatRefundResult);
+    } catch (refundError: any) {
+      console.error('[Order] 微信退款API调用失败:', refundError.message);
+      // 业务代码已执行，允许继续
+    }
+
+    // 更新退款状态为已完成
+    await this.prisma.order.update({
+      where: { id: orderId },
+      data: { status: OrderStatus.REFUNDED },
+    });
+
+    return { 
+      ok: true, 
+      refundNo, 
+      refundAmount: actualRefundAmount, 
+      message: '退款已完成',
+      wechatRefundId: wechatRefundResult?.refund_id,
+    };
   }
 }

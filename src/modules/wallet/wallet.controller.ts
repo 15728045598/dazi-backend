@@ -51,4 +51,34 @@ export class WalletController {
       body.relatedId,
     );
   }
+
+  @ApiBearerAuth()
+  @Post('withdraw')
+  withdraw(
+    @Req() req: { user: { userId: string; type: string } },
+    @Body()
+    body: {
+      amount: number
+      type: 'WECHAT' | 'BANK'
+      openid?: string
+      bankCardNo?: string
+      bankName?: string
+      realName?: string
+    },
+  ) {
+    if (req.user.type === 'admin') throw new ForbiddenException();
+    return this.wallet.withdraw(req.user.userId, body.amount, body.type, {
+      openid: body.openid,
+      bankCardNo: body.bankCardNo,
+      bankName: body.bankName,
+      realName: body.realName,
+    });
+  }
+
+  @ApiBearerAuth()
+  @Get('withdrawals')
+  getWithdrawals(@Req() req: { user: { userId: string; type: string } }) {
+    if (req.user.type === 'admin') throw new ForbiddenException();
+    return this.wallet.getWithdrawals(req.user.userId);
+  }
 }

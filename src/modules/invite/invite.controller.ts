@@ -40,4 +40,21 @@ export class InviteController {
     if (req.user.type === 'admin') throw new ForbiddenException();
     return this.invite.getMyRank(req.user.userId);
   }
+
+  @ApiBearerAuth()
+  @Get('promoter/earnings')
+  getPromoterEarnings(@Req() req: { user: { userId: string; type: string } }) {
+    if (req.user.type === 'admin') throw new ForbiddenException();
+    return this.invite.getPromoterEarnings(req.user.userId);
+  }
+
+  @ApiBearerAuth()
+  @Post('promoter/withdraw')
+  withdraw(
+    @Req() req: { user: { userId: string; type: string } },
+    @Body() body: { amount: number },
+  ) {
+    if (req.user.type === 'admin') throw new ForbiddenException();
+    return this.invite.withdrawPromoterEarnings(req.user.userId, body.amount);
+  }
 }

@@ -4,6 +4,7 @@ export const WechatConfig = () => ({
     secret: process.env.WECHAT_SECRET,
     mchid: process.env.WECHAT_MCHID,
     apiKey: process.env.WECHAT_APIKEY,
+    partnerKey: process.env.WECHAT_PARTNER_KEY,
     notifyUrl: process.env.WECHAT_NOTIFY_URL,
   },
   minio: {

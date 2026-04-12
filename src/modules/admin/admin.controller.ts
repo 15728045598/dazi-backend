@@ -737,6 +737,24 @@ export class AdminController {
     return this.admin.adjustWallet(body);
   }
 
+  // 提现管理
+  @Get('wallet/withdrawals')
+  listWithdrawals(
+    @Query('status') status?: string,
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+  ) {
+    return this.admin.listWithdrawals(status, skip ? parseInt(skip, 10) : 0, take ? parseInt(take, 10) : 20);
+  }
+
+  @Patch('wallet/withdrawals/:id')
+  updateWithdrawal(
+    @Param('id') id: string,
+    @Body() body: { status: 'APPROVED' | 'REJECTED'; note?: string },
+  ) {
+    return this.admin.updateWithdrawal(id, body.status, body.note);
+  }
+
   // ===== 步数管理 =====
   @Get('steps')
   steps(@Query('date') date?: string) {
@@ -772,8 +790,11 @@ export class AdminController {
 
   @Post('upload/image')
   @UseInterceptors(FileInterceptor('file'))
-  uploadImage(@UploadedFile() file: Express.Multer.File) {
-    return this.admin.uploadImage(file);
+  async uploadImage(@UploadedFile() file: Express.Multer.File) {
+    console.log('[Admin Controller] 收到文件:', file?.originalname, file?.size);
+    const result = await this.admin.uploadImage(file);
+    console.log('[Admin Controller] 返回:', JSON.stringify(result));
+    return result;
   }
 
   // ===== 核销管理 =====
@@ -864,5 +885,60 @@ export class AdminController {
   @Delete('price-types/:id')
   deletePriceType(@Param('id') id: string) {
     return this.admin.deletePriceType(id);
+  }
+
+  // ===== 推广大使管理 =====
+  @Get('promoters')
+  listPromoters(
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+    @Query('keyword') keyword?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.admin.listPromoters(
+      skip ? parseInt(skip, 10) : 0,
+      take ? parseInt(take, 10) : 20,
+      { keyword, status },
+    );
+  }
+
+  @Get('promoters/search-users')
+  searchUsers(@Query('keyword') keyword?: string, @Query('take') take?: string) {
+    return this.admin.searchUsers(keyword || '', take ? parseInt(take, 10) : 10);
+  }
+
+  @Get('promoters/:id')
+  getPromoter(@Param('id') id: string) {
+    return this.admin.getPromoter(id);
+  }
+
+  @Post('promoters')
+  createPromoter(@Body() body: { userId: string }) {
+    return this.admin.createPromoter(body);
+  }
+
+  @Patch('promoters/:id/status')
+  updatePromoterStatus(@Param('id') id: string, @Body() body: { status: 'ACTIVE' | 'DISABLED' }) {
+    return this.admin.updatePromoterStatus(id, body.status);
+  }
+
+  @Delete('promoters/:id')
+  deletePromoter(@Param('id') id: string) {
+    return this.admin.deletePromoter(id);
+  }
+
+  @Get('promoters/:id/rewards')
+  getPromoterRewards(
+    @Param('id') id: string,
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.admin.getPromoterRewards(
+      id,
+      skip ? parseInt(skip, 10) : 0,
+      take ? parseInt(take, 10) : 20,
+      status,
+    );
   }
 }

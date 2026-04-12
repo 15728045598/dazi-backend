@@ -1,6 +1,7 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
+import { UploadService } from '../upload/upload.service';
 import {
   ActivityCategory,
   ActivityStatus,
@@ -26,7 +27,10 @@ import { toNum } from '../../common/utils/decimal';
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(forwardRef(() => UploadService)) private readonly uploadService: UploadService,
+  ) {}
   private readonly settingsPath = join(process.cwd(), 'data', 'system-settings.json');
 
   // 默认退款政策
@@ -1765,65 +1769,6 @@ export class AdminService {
     return this.prisma.charityExpense.delete({ where: { id } });
   }
 
-  // ===== 钱包管理 =====
-  async listWallets() {
-    const wallets = await this.prisma.wallet.findMany({
-      include: { user: { select: { id: true, nickname: true, phone: true } } },
-      orderBy: { updatedAt: 'desc' },
-    });
-    return wallets.map((w) => ({
-      ...w,
-      balance: toNum(w.balance),
-      totalRecharge: toNum(w.totalRecharge),
-      totalSpend: toNum(w.totalSpend),
-    }));
-  }
-
-  async listWalletTransactions(skip = 0, take = 50) {
-    const list = await this.prisma.walletTransaction.findMany({
-      include: { user: { select: { id: true, nickname: true, phone: true } } },
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take,
-    });
-    return list.map((t) => ({
-      ...t,
-      amount: toNum(t.amount),
-    }));
-  }
-
-  async adjustWallet(dto: { userId: string; amount: number; type: 'add' | 'subtract'; reason: string }) {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId: dto.userId } });
-    if (!wallet) {
-      throw new NotFoundException('钱包不存在');
-    }
-    const currentBalance = toNum(wallet.balance);
-    const newBalance = dto.type === 'add' ? currentBalance + dto.amount : currentBalance - dto.amount;
-    if (newBalance < 0) {
-      throw new BadRequestException('余额不足');
-    }
-    await this.prisma.wallet.update({
-      where: { id: wallet.id },
-      data: {
-        balance: newBalance,
-        totalRecharge: dto.type === 'add' ? { increment: dto.amount } : undefined,
-        totalSpend: dto.type === 'subtract' ? { increment: dto.amount } : undefined,
-      },
-    });
-    await this.prisma.walletTransaction.create({
-      data: {
-        userId: dto.userId,
-        walletId: wallet.id,
-        type: dto.type === 'add' ? 'ADMIN_ADJUST' : 'ADMIN_DEDUCT',
-        amount: dto.type === 'add' ? dto.amount : -dto.amount,
-        balance: newBalance,
-        status: 'COMPLETED',
-        description: dto.reason,
-      },
-    });
-    return { ok: true };
-  }
-
   // ===== 步数管理 =====
   async listSteps(date?: string) {
     const where = date ? { date } : {};
@@ -1861,9 +1806,6 @@ export class AdminService {
 
   async listInviteRewards(skip = 0, take = 50) {
     const list = await this.prisma.inviteReward.findMany({
-      include: {
-        user: true,
-      },
       orderBy: { createdAt: 'desc' },
       skip,
       take,
@@ -1881,6 +1823,7 @@ export class AdminService {
   }
 
   // ===== 图片上传 =====
+
   async uploadImage(file: Express.Multer.File) {
     if (!file) {
       throw new BadRequestException('请选择要上传的文件');
@@ -1897,25 +1840,14 @@ export class AdminService {
       throw new BadRequestException('图片大小不能超过 5MB');
     }
 
-    // 生成唯一文件名
-    const ext = file.originalname.split('.').pop() || 'jpg';
-    const filename = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}.${ext}`;
-    
-    // 保存到本地 public/uploads 目录
-    const fs = require('fs');
-    const path = require('path');
-    const uploadDir = path.join(process.cwd(), 'public', 'uploads');
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    fs.writeFileSync(path.join(uploadDir, filename), file.buffer);
+    // 使用UploadService上传到OSS
+    const result = await this.uploadService.uploadFile(file);
 
-    // 返回可访问的URL
-    const publicUrl = `/uploads/${filename}`;
+    console.log('[Admin Upload] Result:', result);
 
     return {
-      url: publicUrl,
-      filename,
+      url: result.url,
+      filename: result.key,
       size: file.size,
       mimetype: file.mimetype,
     };
@@ -2130,5 +2062,283 @@ export class AdminService {
     const feedback = await this.prisma.feedback.findUnique({ where: { id } });
     if (!feedback) throw new NotFoundException('反馈不存在');
     return this.prisma.feedback.delete({ where: { id } });
+  }
+
+  // ===== 推广大使管理 =====
+  async listPromoters(skip = 0, take = 20, opts?: { keyword?: string; status?: string }) {
+    const where: Prisma.PromoterWhereInput = {};
+    if (opts?.status) where.status = opts.status as 'ACTIVE' | 'DISABLED';
+    if (opts?.keyword?.trim()) {
+      const k = opts.keyword.trim();
+      where.user = {
+        OR: [{ nickname: { contains: k } }, { phone: { contains: k } }],
+      };
+    }
+    const [rows, total] = await Promise.all([
+      this.prisma.promoter.findMany({
+        where,
+        include: {
+          user: { select: { id: true, nickname: true, phone: true, avatar: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.prisma.promoter.count({ where }),
+    ]);
+    const items = rows.map((p) => ({
+      ...p,
+      totalEarnings: toNum(p.totalEarnings),
+      pendingEarnings: toNum(p.pendingEarnings),
+      withdrawnAmount: toNum(p.withdrawnAmount),
+      nickname: p.user?.nickname ?? '-',
+      phone: p.user?.phone ?? '-',
+      avatar: p.user?.avatar ?? '',
+    }));
+    return { items, total };
+  }
+
+  async getPromoter(id: string) {
+    const promoter = await this.prisma.promoter.findUnique({
+      where: { id },
+      include: {
+        user: { select: { id: true, nickname: true, phone: true, avatar: true, createdAt: true } },
+        rewards: {
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+        },
+      },
+    });
+    if (!promoter) throw new NotFoundException('推广大使不存在');
+    return {
+      ...promoter,
+      totalEarnings: toNum(promoter.totalEarnings),
+      pendingEarnings: toNum(promoter.pendingEarnings),
+      withdrawnAmount: toNum(promoter.withdrawnAmount),
+      rewards: promoter.rewards.map((r) => ({
+        ...r,
+        amount: toNum(r.amount),
+      })),
+    };
+  }
+
+  async createPromoter(dto: { userId: string }) {
+    const user = await this.prisma.user.findUnique({ where: { id: dto.userId } });
+    if (!user) throw new NotFoundException('用户不存在');
+    const existing = await this.prisma.promoter.findUnique({ where: { userId: dto.userId } });
+    if (existing) throw new BadRequestException('该用户已是推广大使');
+    return this.prisma.promoter.create({
+      data: { userId: dto.userId },
+      include: { user: { select: { id: true, nickname: true, phone: true, avatar: true } } },
+    });
+  }
+
+  // 搜索用户（用于添加推广大使）
+  async searchUsers(keyword: string, take = 10) {
+    const where: Prisma.UserWhereInput = {
+      status: 'ACTIVE',
+    };
+    if (keyword?.trim()) {
+      const k = keyword.trim();
+      where.OR = [
+        { nickname: { contains: k } },
+        { phone: { contains: k } },
+        { id: { contains: k } },
+      ];
+    }
+    const users = await this.prisma.user.findMany({
+      where,
+      select: { id: true, nickname: true, phone: true, avatar: true },
+      take,
+      orderBy: { createdAt: 'desc' },
+    });
+    return users;
+  }
+
+  async updatePromoterStatus(id: string, status: 'ACTIVE' | 'DISABLED') {
+    const promoter = await this.prisma.promoter.findUnique({ where: { id } });
+    if (!promoter) throw new NotFoundException('推广大使不存在');
+    return this.prisma.promoter.update({ where: { id }, data: { status } });
+  }
+
+  async deletePromoter(id: string) {
+    const promoter = await this.prisma.promoter.findUnique({ where: { id } });
+    if (!promoter) throw new NotFoundException('推广大使不存在');
+    return this.prisma.promoter.delete({ where: { id } });
+  }
+
+  async getPromoterRewards(promoterId: string, skip = 0, take = 20, status?: string) {
+    const where: Prisma.PromoterRewardWhereInput = { promoterId };
+    if (status) where.status = status as 'PENDING' | 'SETTLED' | 'WITHDRAWN';
+    const [rows, total] = await Promise.all([
+      this.prisma.promoterReward.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.prisma.promoterReward.count({ where }),
+    ]);
+    return {
+      items: rows.map((r) => ({ ...r, amount: toNum(r.amount) })),
+      total,
+    };
+  }
+
+  // ===== 钱包管理 =====
+  async listWallets(skip = 0, take = 20) {
+    const [rows, total] = await Promise.all([
+      this.prisma.wallet.findMany({
+        include: { user: { select: { id: true, nickname: true, phone: true, avatar: true } } },
+        orderBy: { updatedAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.prisma.wallet.count(),
+    ]);
+    return {
+      items: rows.map((w) => ({
+        id: w.id,
+        userId: w.userId,
+        nickname: w.user?.nickname || '-',
+        phone: w.user?.phone || '-',
+        avatar: w.user?.avatar || '',
+        balance: toNum(w.balance),
+        totalRecharge: toNum(w.totalRecharge),
+        totalSpend: toNum(w.totalSpend),
+      })),
+      total,
+    };
+  }
+
+  async listWalletTransactions(skip = 0, take = 50) {
+    const [rows, total] = await Promise.all([
+      this.prisma.walletTransaction.findMany({
+        include: { user: { select: { id: true, nickname: true, phone: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.prisma.walletTransaction.count(),
+    ]);
+    return {
+      items: rows.map((t) => ({
+        id: t.id,
+        userId: t.userId,
+        userName: t.user?.nickname || '-',
+        userPhone: t.user?.phone || '-',
+        type: t.type,
+        amount: toNum(t.amount),
+        balance: toNum(t.balance),
+        description: t.description,
+        status: t.status,
+        createdAt: t.createdAt,
+      })),
+      total,
+    };
+  }
+
+  async adjustWallet(dto: { userId: string; amount: number; type: 'add' | 'subtract'; reason: string }) {
+    const user = await this.prisma.user.findUnique({ where: { id: dto.userId } });
+    if (!user) throw new NotFoundException('用户不存在');
+
+    const wallet = await this.prisma.wallet.findUnique({ where: { userId: dto.userId } });
+    if (!wallet) {
+      throw new NotFoundException('用户钱包不存在');
+    }
+
+    if (dto.type === 'subtract' && wallet.balance.lessThan(dto.amount)) {
+      throw new BadRequestException('余额不足');
+    }
+
+    const newBalance = dto.type === 'add' ? wallet.balance.plus(dto.amount) : wallet.balance.minus(dto.amount);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.wallet.update({
+        where: { id: wallet.id },
+        data: { balance: newBalance },
+      });
+      await tx.walletTransaction.create({
+        data: {
+          walletId: wallet.id,
+          userId: dto.userId,
+          type: dto.type === 'add' ? 'ADMIN_ADD' : 'ADMIN_SUBTRACT',
+          amount: dto.type === 'add' ? dto.amount : -dto.amount,
+          balance: newBalance,
+          description: dto.reason,
+          status: 'SUCCESS',
+        },
+      });
+    });
+
+    return { ok: true, newBalance: toNum(newBalance) };
+  }
+
+  // 提现管理
+  async listWithdrawals(status?: string, skip = 0, take = 20) {
+    const where: Prisma.WalletTransactionWhereInput = { type: 'WITHDRAW' };
+    if (status) where.status = status;
+
+    const [rows, total] = await Promise.all([
+      this.prisma.walletTransaction.findMany({
+        where,
+        include: { user: { select: { id: true, nickname: true, phone: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.prisma.walletTransaction.count({ where }),
+    ]);
+
+    return {
+      items: rows.map((t) => ({
+        id: t.id,
+        userId: t.userId,
+        userName: t.user?.nickname || '-',
+        userPhone: t.user?.phone || '-',
+        amount: Math.abs(toNum(t.amount)),
+        type: t.description?.includes('微信') ? 'WECHAT' : 'BANK',
+        status: t.status,
+        createdAt: t.createdAt,
+      })),
+      total,
+    };
+  }
+
+  async updateWithdrawal(id: string, status: 'APPROVED' | 'REJECTED', note?: string) {
+    const transaction = await this.prisma.walletTransaction.findUnique({ where: { id } });
+    if (!transaction) throw new NotFoundException('提现记录不存在');
+    if (transaction.type !== 'WITHDRAW') throw new BadRequestException('该记录不是提现记录');
+
+    // 如果拒绝，退还余额给用户
+    if (status === 'REJECTED') {
+      const wallet = await this.prisma.wallet.findUnique({ where: { userId: transaction.userId } });
+      if (wallet) {
+        const refundAmount = Math.abs(toNum(transaction.amount));
+        const newBalance = wallet.balance.plus(refundAmount);
+        await this.prisma.$transaction(async (tx) => {
+          await tx.wallet.update({
+            where: { id: wallet.id },
+            data: { balance: newBalance },
+          });
+          await tx.walletTransaction.create({
+            data: {
+              walletId: wallet.id,
+              userId: transaction.userId,
+              type: 'WITHDRAW_REJECTED',
+              amount: refundAmount,
+              balance: newBalance,
+              description: `提现被拒绝: ${note || '管理员拒绝'}`,
+              status: 'SUCCESS',
+            },
+          });
+        });
+      }
+    }
+
+    return this.prisma.walletTransaction.update({
+      where: { id },
+      data: { status, description: note ? `${transaction.description} (${note})` : transaction.description },
+    });
   }
 }

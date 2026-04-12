@@ -128,6 +128,11 @@ export class AuthService {
       type: 'user',
     });
 
+    // 获取用户 profile
+    const profile = await this.prisma.userProfile.findUnique({
+      where: { userId: user.id },
+    });
+
     return {
       accessToken,
       tokenType: 'Bearer',
@@ -138,6 +143,7 @@ export class AuthService {
         avatar: user.avatar,
         role: user.role,
         points: user.points,
+        profile: profile || {},
       },
     };
   }
@@ -246,6 +252,11 @@ export class AuthService {
       type: 'user',
     });
 
+    // 获取用户 profile
+    const profile = await this.prisma.userProfile.findUnique({
+      where: { userId: user.id },
+    });
+
     return {
       accessToken,
       tokenType: 'Bearer',
@@ -257,6 +268,7 @@ export class AuthService {
         role: user.role,
         points: user.points,
         phone: user.phone,
+        profile: profile || {},
       },
     };
   }
