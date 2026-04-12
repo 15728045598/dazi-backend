@@ -61,12 +61,18 @@ export class AuthService {
     console.log('[WeChat Login] API URL:', wechatApiUrl.replace(secret, '***'));
 
     try {
+      console.log('[WeChat Login] 开始请求微信API...');
       const response = await axios.get<{
         openid?: string;
         session_key?: string;
         errcode?: number;
         errmsg?: string;
-      }>(wechatApiUrl);
+      }>(wechatApiUrl, {
+        timeout: 10000, // 10秒超时
+      }).catch((err) => {
+        console.error('[WeChat Login] axios请求失败:', err.message);
+        throw err;
+      });
 
       console.log('[WeChat Login] API Response:', response.data);
 
@@ -90,11 +96,13 @@ export class AuthService {
         // WeChat API 返回了错误响应
         console.error('[WeChat Login] API 错误响应 status:', error.response.status);
         console.error('[WeChat Login] API 错误响应 data:', JSON.stringify(error.response.data));
-        throw new BadRequestException(`微信登录失败: ${error.response.data?.errmsg || '未知错误'} (errcode: ${error.response.data?.errcode}, status: ${error.response.status})`);
+        const errMsg = error.response.data?.errmsg || error.message || '未知错误'
+        const errCode = error.response.data?.errcode
+        throw new BadRequestException(`微信登录失败: ${errMsg}${errCode !== undefined ? ` (errcode: ${errCode})` : ''}`);
       } else if (error.request) {
         // 请求发出但没有收到响应 - 网络问题
         console.error('[WeChat Login] 网络错误 - 无响应:', error.message);
-        throw new BadRequestException('微信服务器连接失败，请稍后重试');
+        throw new BadRequestException('微信服务器连接失败，请检查网络后重试');
       } else {
         // 请求配置错误
         console.error('[WeChat Login] 请求配置错误:', error.message);
