@@ -44,12 +44,12 @@ async function bootstrap() {
     defaultVersion: '1',
   });
 
-  // 全局管道
+  // 全局管道 - 对公开接口放宽验证
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
       transform: true,
-      forbidNonWhitelisted: true,
+      forbidNonWhitelisted: false, // 放宽限制，避免某些字段被拒绝
     }),
   );
 
