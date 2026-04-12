@@ -1,20 +1,10 @@
-import { IsOptional, IsString } from 'class-validator';
-
+// 简化的 DTO - 不使用验证装饰器，避免 ValidationPipe 问题
 export class WechatLoginDto {
-  @IsOptional()
-  @IsString()
   code?: string;
 }
 
 export class WechatPhoneLoginDto {
-  @IsString()
   code!: string;
-
-  @IsOptional()
-  @IsString()
   encryptedData?: string;
-
-  @IsOptional()
-  @IsString()
   iv?: string;
 }

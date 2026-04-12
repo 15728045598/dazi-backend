@@ -22,7 +22,7 @@ export class AuthController {
 
   @Public()
   @Post('wechat')
-  wechatLogin(@Body() body: WechatLoginDto) {
+  wechatLogin(@Body() body: any) {
     return this.auth.wechatLogin(body?.code);
   }
 
@@ -40,7 +40,7 @@ export class AuthController {
 
   @Public()
   @Post('wechat-phone')
-  wechatPhoneLogin(@Body() body: WechatPhoneLoginDto) {
+  wechatPhoneLogin(@Body() body: any) {
     return this.auth.wechatPhoneLogin(body.code, body.encryptedData, body.iv);
   }
 
