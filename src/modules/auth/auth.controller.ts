@@ -2,6 +2,7 @@ import { Body, Controller, Get, Post, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Public } from '../../common/decorators/public.decorator';
 import { AuthService } from './auth.service';
+import { WechatLoginDto, WechatPhoneLoginDto } from './dto/auth.dto';
 
 interface AuthUser {
   userId: string;
@@ -21,7 +22,7 @@ export class AuthController {
 
   @Public()
   @Post('wechat')
-  wechatLogin(@Body() body: { code?: string }) {
+  wechatLogin(@Body() body: WechatLoginDto) {
     return this.auth.wechatLogin(body?.code);
   }
 
@@ -39,7 +40,7 @@ export class AuthController {
 
   @Public()
   @Post('wechat-phone')
-  wechatPhoneLogin(@Body() body: { code: string; encryptedData?: string; iv?: string }) {
+  wechatPhoneLogin(@Body() body: WechatPhoneLoginDto) {
     return this.auth.wechatPhoneLogin(body.code, body.encryptedData, body.iv);
   }
 
